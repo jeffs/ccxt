@@ -4,7 +4,71 @@
 import Exchange from './abstract/bluefin.js';
 import { Precise } from './base/Precise.js';
 import { TICK_SIZE } from './base/functions/number.js';
+import { ed25519 } from './static_dependencies/noble-curves/ed25519.js';
+import { blake2b } from './static_dependencies/noble-hashes/blake2b.js';
+import { concatBytes, utf8ToBytes } from './static_dependencies/noble-hashes/utils.js';
+import { ArgumentsRequired, AuthenticationError } from './base/errors.js';
 import type { Balances, Dict, FundingRateHistory, Int, Market, Num, OHLCV, Order, OrderBook, OrderSide, OrderType, Position, Str, Strings, Ticker, Tickers, Trade } from './base/types.js';
+
+// ----------------------------------------------------------------------------
+// Discriminated union types for all signable payloads.
+// Field names and ordering must match the SDK's UI* interfaces exactly
+// so that JSON.stringify produces byte-identical output.
+
+interface BluefinUIOrderRequest {
+    readonly type: 'Bluefin Pro Order';
+    readonly ids: string;
+    readonly account: string;
+    readonly market: string;
+    readonly price: string;
+    readonly quantity: string;
+    readonly leverage: string;
+    readonly side: string;
+    readonly positionType: 'ISOLATED' | 'CROSS';
+    readonly expiration: string;
+    readonly salt: string;
+    readonly signedAt: string;
+}
+
+interface BluefinUILeverageRequest {
+    readonly type: 'Bluefin Pro Leverage Adjustment';
+    readonly ids: string;
+    readonly account: string;
+    readonly market: string;
+    readonly leverage: string;
+    readonly salt: string;
+    readonly signedAt: string;
+}
+
+interface BluefinUIWithdrawRequest {
+    readonly type: 'Bluefin Pro Withdrawal';
+    readonly eds: string;
+    readonly assetSymbol: string;
+    readonly account: string;
+    readonly amount: string;
+    readonly salt: string;
+    readonly signedAt: string;
+}
+
+interface BluefinUIMarginRequest {
+    readonly type: 'Bluefin Pro Margin Adjustment';
+    readonly ids: string;
+    readonly account: string;
+    readonly market: string;
+    readonly add: boolean;
+    readonly amount: string;
+    readonly salt: string;
+    readonly signedAt: string;
+}
+
+type BluefinUISignable = BluefinUIOrderRequest | BluefinUILeverageRequest
+    | BluefinUIWithdrawRequest | BluefinUIMarginRequest;
+
+interface BluefinLoginRequest {
+    readonly accountAddress: string;
+    readonly signedAtMillis: number;
+    readonly audience: 'api';
+}
 
 // ----------------------------------------------------------------------------
 
@@ -116,11 +180,13 @@ export default class bluefin extends Exchange {
                         'api/v1/account/trades',
                         'api/v1/account/transactions',
                         'api/v1/account/fundingRateHistory',
-                        'api/v1/trade/openOrders',
-                        'api/v1/trade/standbyOrders',
                     ],
                 },
                 'trade': {
+                    'get': [
+                        'api/v1/trade/openOrders',
+                        'api/v1/trade/standbyOrders',
+                    ],
                     'post': [
                         'api/v1/trade/orders',
                         'api/v1/trade/withdraw',
@@ -146,9 +212,158 @@ export default class bluefin extends Exchange {
         });
     }
 
+    // ---- Sui signing primitives ----
+
+    bcsSerializeBytes (data: Uint8Array): Uint8Array {
+        // BCS encoding for a byte vector: ULEB128 length prefix followed by raw bytes
+        let len = data.length;
+        const lenBytes: number[] = [];
+        while (len >= 0x80) {
+            lenBytes.push ((len & 0x7f) | 0x80);
+            len >>>= 7;
+        }
+        lenBytes.push (len);
+        return concatBytes (new Uint8Array (lenBytes), data);
+    }
+
+    suiSignPersonalMessage (message: Uint8Array, privateKeyHex: string): string {
+        // Sui personal-message signing:
+        // 1. BCS-serialize the message (ULEB128 length + bytes)
+        // 2. Prepend intent bytes [3, 0, 0] (PersonalMessage)
+        // 3. Blake2b-256 hash the intent-prefixed message
+        // 4. Ed25519-sign the hash
+        // 5. Envelope: flag(0x00) || sig(64) || pubkey(32)
+        // 6. Return base64
+        const bcsMsg = this.bcsSerializeBytes (message);
+        const intentMsg = concatBytes (new Uint8Array ([ 3, 0, 0 ]), bcsMsg);
+        const digest = blake2b (intentMsg, { dkLen: 32 });
+        const keyBytes = this.base16ToBinary (privateKeyHex.replace ('0x', ''));
+        const sig = ed25519.sign (digest, keyBytes);
+        const pubkey = ed25519.getPublicKey (keyBytes);
+        const envelope = concatBytes (new Uint8Array ([ 0x00 ]), sig, pubkey);
+        return this.binaryToBase64 (envelope);
+    }
+
+    // ---- Trade request signing ----
+
+    signTradeRequest (payload: BluefinUISignable): string {
+        const json = JSON.stringify (payload, null, 2);
+        return this.suiSignPersonalMessage (utf8ToBytes (json), this.privateKey);
+    }
+
+    // ---- Auth flow ----
+
+    async authenticate (params = {}): Promise<Dict> {
+        this.checkRequiredCredentials ();
+        const now = this.milliseconds ();
+        const loginRequest: BluefinLoginRequest = {
+            'accountAddress': this.walletAddress,
+            'signedAtMillis': now,
+            'audience': 'api',
+        };
+        const loginJson = JSON.stringify (loginRequest);
+        const signature = this.suiSignPersonalMessage (utf8ToBytes (loginJson), this.privateKey);
+        const request: Dict = {
+            'accountAddress': loginRequest['accountAddress'],
+            'signedAtMillis': loginRequest['signedAtMillis'],
+            'audience': loginRequest['audience'],
+            'payloadSignature': signature,
+        };
+        const response = await this.authPostAuthV2Token (this.extend (request, params));
+        const accessToken = this.safeString (response, 'accessToken');
+        const refreshToken = this.safeString (response, 'refreshToken');
+        const accessValidFor = this.safeNumber (response, 'accessTokenValidForSeconds', 300);
+        const refreshValidFor = this.safeNumber (response, 'refreshTokenValidForSeconds', 2592000);
+        if (accessToken === undefined) {
+            throw new AuthenticationError (this.id + ' authenticate() failed — no accessToken in response');
+        }
+        const nowSeconds = now / 1000;
+        this.options['accessToken'] = accessToken;
+        this.options['refreshToken'] = refreshToken;
+        this.options['tokenSetAtSeconds'] = nowSeconds;
+        this.options['accessTokenValidForSeconds'] = accessValidFor;
+        this.options['refreshTokenValidForSeconds'] = refreshValidFor;
+        return response;
+    }
+
+    async refreshAccessToken (params = {}): Promise<Dict> {
+        const refreshToken = this.safeString (this.options, 'refreshToken');
+        if (refreshToken === undefined) {
+            return await this.authenticate (params);
+        }
+        const request: Dict = {
+            'refreshToken': refreshToken,
+        };
+        const response = await this.authPutAuthTokenRefresh (this.extend (request, params));
+        const accessToken = this.safeString (response, 'accessToken');
+        const newRefreshToken = this.safeString (response, 'refreshToken');
+        const accessValidFor = this.safeNumber (response, 'accessTokenValidForSeconds', 300);
+        const refreshValidFor = this.safeNumber (response, 'refreshTokenValidForSeconds', 2592000);
+        if (accessToken === undefined) {
+            throw new AuthenticationError (this.id + ' refreshAccessToken() failed — no accessToken in response');
+        }
+        const nowSeconds = this.milliseconds () / 1000;
+        this.options['accessToken'] = accessToken;
+        this.options['refreshToken'] = newRefreshToken;
+        this.options['tokenSetAtSeconds'] = nowSeconds;
+        this.options['accessTokenValidForSeconds'] = accessValidFor;
+        this.options['refreshTokenValidForSeconds'] = refreshValidFor;
+        return response;
+    }
+
+    isAccessTokenExpired (): boolean {
+        const token = this.safeString (this.options, 'accessToken');
+        const tokenSetAt = this.safeNumber (this.options, 'tokenSetAtSeconds');
+        if (token === undefined || tokenSetAt === undefined) {
+            return true;
+        }
+        const lifetime = this.safeNumber (this.options, 'accessTokenValidForSeconds', 300);
+        const nowSeconds = this.milliseconds () / 1000;
+        // Refresh at 80% of lifetime (matching SDK)
+        return nowSeconds >= (tokenSetAt + lifetime * 0.8);
+    }
+
+    isRefreshTokenValid (): boolean {
+        const refreshToken = this.safeString (this.options, 'refreshToken');
+        const tokenSetAt = this.safeNumber (this.options, 'tokenSetAtSeconds');
+        if (refreshToken === undefined || tokenSetAt === undefined) {
+            return false;
+        }
+        const lifetime = this.safeNumber (this.options, 'refreshTokenValidForSeconds', 2592000);
+        const nowSeconds = this.milliseconds () / 1000;
+        // 60 second safety buffer
+        return nowSeconds < (tokenSetAt + lifetime - 60);
+    }
+
+    async getAccessToken (): Promise<string> {
+        const token = this.safeString (this.options, 'accessToken');
+        if (token === undefined) {
+            await this.authenticate ();
+            return this.options['accessToken'];
+        }
+        if (this.isAccessTokenExpired ()) {
+            if (this.isRefreshTokenValid ()) {
+                await this.refreshAccessToken ();
+            } else {
+                await this.authenticate ();
+            }
+        }
+        return this.options['accessToken'];
+    }
+
+    generateSalt (): string {
+        return (this.milliseconds () + Math.floor (Math.random () * 1000000)).toString ();
+    }
+
+    // ---- Public API methods ----
+
     async fetchMarkets (params = {}): Promise<Market[]> {
         const response = await this.exchangeGetV1ExchangeInfo (params);
         const markets = this.safeList (response, 'markets', []);
+        const contractsConfig = this.safeDict (response, 'contractsConfig');
+        if (contractsConfig !== undefined) {
+            this.options['contractsConfig'] = contractsConfig;
+        }
         const result: Market[] = [];
         for (let i = 0; i < markets.length; i++) {
             result.push (this.parseMarket (markets[i]));
@@ -259,85 +474,317 @@ export default class bluefin extends Exchange {
         return result;
     }
 
+    // ---- Private read-only methods ----
+
     async fetchBalance (params = {}): Promise<Balances> {
-        // TODO: call accountGetApiV1Account (needs JWT),
-        //       parse via parseBalance
-        //
-        // await this.loadMarkets ();
-        // const response = await this.accountGetApiV1Account (params);
-        // return this.parseBalance (response);
-        throw new Error ('fetchBalance not implemented');
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const response = await this.accountGetApiV1Account (params);
+        return this.parseBalance (response);
     }
 
     async fetchPositions (symbols: Strings = undefined, params = {}): Promise<Position[]> {
-        // TODO: call accountGetApiV1Account (needs JWT),
-        //       extract positions array, parse each via parsePosition
-        throw new Error ('fetchPositions not implemented');
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const response = await this.accountGetApiV1Account (params);
+        const positions = this.safeList (response, 'positions', []);
+        const result: Position[] = [];
+        for (let i = 0; i < positions.length; i++) {
+            const position = this.parsePosition (positions[i]);
+            if (symbols !== undefined && !this.inArray (position['symbol'], symbols)) {
+                continue;
+            }
+            result.push (position);
+        }
+        return result;
     }
 
     async fetchMyTrades (symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Trade[]> {
-        // TODO: call accountGetApiV1AccountTrades (needs JWT),
-        //       parse each via parseTrade
-        throw new Error ('fetchMyTrades not implemented');
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const request: Dict = {};
+        if (symbol !== undefined) {
+            request['symbol'] = this.bluefinSymbol (symbol);
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.accountGetApiV1AccountTrades (this.extend (request, params));
+        const market = (symbol !== undefined) ? this.market (symbol) : undefined;
+        const result: Trade[] = [];
+        const trades = Array.isArray (response) ? response : this.safeList (response, 'trades', []);
+        for (let i = 0; i < trades.length; i++) {
+            result.push (this.parseTrade (trades[i], market));
+        }
+        return result;
     }
 
     async fetchOpenOrders (symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Order[]> {
-        // TODO: call accountGetApiV1TradeOpenOrders (needs JWT),
-        //       parse each via parseOrder
-        throw new Error ('fetchOpenOrders not implemented');
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const request: Dict = {};
+        if (symbol !== undefined) {
+            request['symbol'] = this.bluefinSymbol (symbol);
+        }
+        const response = await this.tradeGetApiV1TradeOpenOrders (this.extend (request, params));
+        const market = (symbol !== undefined) ? this.market (symbol) : undefined;
+        const orders = Array.isArray (response) ? response : this.safeList (response, 'orders', []);
+        const result: Order[] = [];
+        for (let i = 0; i < orders.length; i++) {
+            result.push (this.parseOrder (orders[i], market));
+        }
+        return result;
     }
 
+    // ---- Private write methods ----
+
     async createOrder (symbol: string, type: OrderType, side: OrderSide, amount: number, price: Num = undefined, params = {}): Promise<Order> {
-        // TODO:
-        //  1. loadMarkets, resolve market
-        //  2. Build signedFields:
-        //     { market, price (E9), quantity (E9), leverage (E9),
-        //       side: BUY/SELL, reduceOnly, salt, expiration, orderType }
-        //  3. Sign fields with Ed25519 via signRequest()
-        //  4. POST to tradePostApiV1TradeOrders with signed payload + JWT
-        //  5. Parse response via parseOrder
-        throw new Error ('createOrder not implemented');
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const market = this.market (symbol);
+        const contractsConfig = this.safeDict (this.options, 'contractsConfig', {});
+        const idsId = this.safeString (contractsConfig, 'idsId');
+        if (idsId === undefined) {
+            throw new ArgumentsRequired (this.id + ' createOrder() requires contractsConfig.idsId from fetchMarkets()');
+        }
+        const now = this.milliseconds ();
+        const leverage = this.safeString (params, 'leverage', '1');
+        const isIsolated = this.safeBool (params, 'isIsolated', false);
+        const reduceOnly = this.safeBool (params, 'reduceOnly', false);
+        const postOnly = this.safeBool (params, 'postOnly', false);
+        const timeInForce = this.safeString (params, 'timeInForce');
+        const clientOrderId = this.safeString (params, 'clientOrderId');
+        const bluefinSide = (side === 'buy') ? 'LONG' : 'SHORT';
+        const priceStr = (price !== undefined) ? this.numberToString (price) : '0';
+        const amountStr = this.numberToString (amount);
+        const priceE9 = this.toE9 (priceStr);
+        const quantityE9 = this.toE9 (amountStr);
+        const leverageE9 = this.toE9 (leverage);
+        const salt = this.generateSalt ();
+        const expiration = (now + 86400000).toString (); // 24h
+        const signedAt = now.toString ();
+        const uiPayload: BluefinUIOrderRequest = {
+            'type': 'Bluefin Pro Order',
+            'ids': idsId,
+            'account': this.walletAddress,
+            'market': market['id'],
+            'price': priceE9,
+            'quantity': quantityE9,
+            'leverage': leverageE9,
+            'side': bluefinSide,
+            'positionType': isIsolated ? 'ISOLATED' : 'CROSS',
+            'expiration': expiration,
+            'salt': salt,
+            'signedAt': signedAt,
+        };
+        const signature = this.signTradeRequest (uiPayload);
+        const request: Dict = {
+            'signedFields': {
+                'symbol': market['id'],
+                'accountAddress': this.walletAddress,
+                'priceE9': priceE9,
+                'quantityE9': quantityE9,
+                'side': bluefinSide,
+                'leverageE9': leverageE9,
+                'isIsolated': isIsolated,
+                'salt': salt,
+                'idsId': idsId,
+                'expiresAtMillis': this.parseToInt (expiration),
+                'signedAtMillis': now,
+            },
+            'signature': signature,
+            'type': type.toUpperCase (),
+            'reduceOnly': reduceOnly,
+        };
+        if (postOnly) {
+            request['postOnly'] = true;
+        }
+        if (timeInForce !== undefined) {
+            request['timeInForce'] = timeInForce;
+        }
+        if (clientOrderId !== undefined) {
+            request['clientOrderId'] = clientOrderId;
+        }
+        const cleanParams = this.omit (params, [ 'leverage', 'isIsolated', 'reduceOnly', 'postOnly', 'timeInForce', 'clientOrderId' ]);
+        const response = await this.tradePostApiV1TradeOrders (this.extend (request, cleanParams));
+        return this.parseOrder (response, market);
     }
 
     async cancelOrder (id: string, symbol: Str = undefined, params = {}): Promise<Order> {
-        // TODO: build cancel payload with orderId(s),
-        //       sign via signRequest, PUT to tradePutApiV1TradeOrdersCancel
-        throw new Error ('cancelOrder not implemented');
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const request: Dict = {
+            'orderHashes': [ id ],
+        };
+        if (symbol !== undefined) {
+            request['symbol'] = this.bluefinSymbol (symbol);
+        }
+        const response = await this.tradePutApiV1TradeOrdersCancel (this.extend (request, params));
+        return this.safeOrder ({
+            'id': id,
+            'info': response,
+            'status': 'canceled',
+        });
     }
 
     async cancelOrders (ids: string[], symbol: Str = undefined, params = {}): Promise<Order[]> {
-        // TODO: batch cancel — same endpoint, multiple orderIds
-        throw new Error ('cancelOrders not implemented');
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const request: Dict = {
+            'orderHashes': ids,
+        };
+        if (symbol !== undefined) {
+            request['symbol'] = this.bluefinSymbol (symbol);
+        }
+        const response = await this.tradePutApiV1TradeOrdersCancel (this.extend (request, params));
+        const cancelledHashes = this.safeList (response, 'orderHashes', ids);
+        const result: Order[] = [];
+        for (let i = 0; i < cancelledHashes.length; i++) {
+            result.push (this.safeOrder ({
+                'id': cancelledHashes[i],
+                'info': response,
+                'status': 'canceled',
+            }));
+        }
+        return result;
     }
 
     async setLeverage (leverage: Int, symbol: Str = undefined, params = {}): Promise<any> {
-        // TODO: build payload { symbol, leverageE9: toE9(leverage) },
-        //       sign with signRequest, PUT to tradePutApiV1TradeLeverage
-        throw new Error ('setLeverage not implemented');
+        if (symbol === undefined) {
+            throw new ArgumentsRequired (this.id + ' setLeverage() requires a symbol argument');
+        }
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const market = this.market (symbol);
+        const contractsConfig = this.safeDict (this.options, 'contractsConfig', {});
+        const idsId = this.safeString (contractsConfig, 'idsId');
+        if (idsId === undefined) {
+            throw new ArgumentsRequired (this.id + ' setLeverage() requires contractsConfig.idsId from fetchMarkets()');
+        }
+        const now = this.milliseconds ();
+        const leverageE9 = this.toE9 (this.numberToString (leverage));
+        const salt = this.generateSalt ();
+        const signedAt = now.toString ();
+        const uiPayload: BluefinUILeverageRequest = {
+            'type': 'Bluefin Pro Leverage Adjustment',
+            'ids': idsId,
+            'account': this.walletAddress,
+            'market': market['id'],
+            'leverage': leverageE9,
+            'salt': salt,
+            'signedAt': signedAt,
+        };
+        const signature = this.signTradeRequest (uiPayload);
+        const request: Dict = {
+            'signedFields': {
+                'accountAddress': this.walletAddress,
+                'symbol': market['id'],
+                'leverageE9': leverageE9,
+                'salt': salt,
+                'idsId': idsId,
+                'signedAtMillis': now,
+            },
+            'signature': signature,
+        };
+        return await this.tradePutApiV1TradeLeverage (this.extend (request, params));
     }
 
     async setMarginMode (marginMode: string, symbol: Str = undefined, params = {}): Promise<any> {
-        // TODO: Bluefin sets margin mode via the leverage endpoint
-        //       (isolated vs cross is a field on the leverage request)
-        throw new Error ('setMarginMode not implemented');
+        // Bluefin sets margin mode per-order via the isIsolated field.
+        // Store the preference so createOrder can use it as default.
+        const mode = marginMode.toLowerCase ();
+        if (mode !== 'isolated' && mode !== 'cross') {
+            throw new ArgumentsRequired (this.id + ' setMarginMode() marginMode must be "isolated" or "cross"');
+        }
+        this.options['defaultMarginMode'] = mode;
+        return { 'info': mode };
     }
 
     async addMargin (symbol: string, amount: number, params = {}): Promise<any> {
-        // TODO: PUT to tradePutApiV1TradeAdjustIsolatedMargin
-        //       with positive amount (E9)
-        throw new Error ('addMargin not implemented');
+        return await this.adjustMargin (symbol, amount, 'Add', params);
     }
 
     async reduceMargin (symbol: string, amount: number, params = {}): Promise<any> {
-        // TODO: PUT to tradePutApiV1TradeAdjustIsolatedMargin
-        //       with negative amount (E9)
-        throw new Error ('reduceMargin not implemented');
+        return await this.adjustMargin (symbol, amount, 'Remove', params);
+    }
+
+    async adjustMargin (symbol: string, amount: number, operation: string, params = {}): Promise<any> {
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const market = this.market (symbol);
+        const contractsConfig = this.safeDict (this.options, 'contractsConfig', {});
+        const idsId = this.safeString (contractsConfig, 'idsId');
+        if (idsId === undefined) {
+            throw new ArgumentsRequired (this.id + ' adjustMargin() requires contractsConfig.idsId from fetchMarkets()');
+        }
+        const now = this.milliseconds ();
+        const quantityE9 = this.toE9 (this.numberToString (amount));
+        const salt = this.generateSalt ();
+        const signedAt = now.toString ();
+        const isAdd = (operation === 'Add');
+        const uiPayload: BluefinUIMarginRequest = {
+            'type': 'Bluefin Pro Margin Adjustment',
+            'ids': idsId,
+            'account': this.walletAddress,
+            'market': market['id'],
+            'add': isAdd,
+            'amount': quantityE9,
+            'salt': salt,
+            'signedAt': signedAt,
+        };
+        const signature = this.signTradeRequest (uiPayload);
+        const request: Dict = {
+            'signedFields': {
+                'idsId': idsId,
+                'accountAddress': this.walletAddress,
+                'symbol': market['id'],
+                'operation': operation,
+                'quantityE9': quantityE9,
+                'salt': salt,
+                'signedAtMillis': now,
+            },
+            'signature': signature,
+        };
+        return await this.tradePutApiV1TradeAdjustIsolatedMargin (this.extend (request, params));
     }
 
     async withdraw (code: string, amount: number, address: string, tag: Str = undefined, params = {}): Promise<any> {
-        // TODO: POST to tradePostApiV1TradeWithdraw, signed
-        throw new Error ('withdraw not implemented');
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const contractsConfig = this.safeDict (this.options, 'contractsConfig', {});
+        const edsId = this.safeString (contractsConfig, 'edsId');
+        if (edsId === undefined) {
+            throw new ArgumentsRequired (this.id + ' withdraw() requires contractsConfig.edsId from fetchMarkets()');
+        }
+        const now = this.milliseconds ();
+        const amountE9 = this.toE9 (this.numberToString (amount));
+        const salt = this.generateSalt ();
+        const signedAt = now.toString ();
+        const uiPayload: BluefinUIWithdrawRequest = {
+            'type': 'Bluefin Pro Withdrawal',
+            'eds': edsId,
+            'assetSymbol': code,
+            'account': this.walletAddress,
+            'amount': amountE9,
+            'salt': salt,
+            'signedAt': signedAt,
+        };
+        const signature = this.signTradeRequest (uiPayload);
+        const request: Dict = {
+            'signedFields': {
+                'assetSymbol': code,
+                'accountAddress': this.walletAddress,
+                'amountE9': amountE9,
+                'salt': salt,
+                'edsId': edsId,
+                'signedAtMillis': now,
+            },
+            'signature': signature,
+        };
+        return await this.tradePostApiV1TradeWithdraw (this.extend (request, params));
     }
+
+    // ---- Parsers ----
 
     parseMarket (market: Dict): Market {
         const id = this.safeString (market, 'symbol');
@@ -445,20 +892,31 @@ export default class bluefin extends Exchange {
         const cost = this.parseE9 (this.safeString (trade, 'quoteQuantityE9'));
         const side = this.parseOrderSide (this.safeString (trade, 'side'));
         const timestamp = this.safeInteger (trade, 'executedAtMillis');
+        const orderId = this.safeString (trade, 'orderHash');
+        const takerOrMaker = this.safeStringLower (trade, 'makerTaker');
+        // Private trades include fee info
+        let fee = undefined;
+        const feeE9 = this.safeString (trade, 'tradingFeeE9');
+        if (feeE9 !== undefined) {
+            fee = {
+                'cost': this.parseNumber (this.parseE9 (feeE9)),
+                'currency': 'USDC',
+            };
+        }
         return this.safeTrade ({
             'id': id,
             'info': trade,
             'timestamp': timestamp,
             'datetime': this.iso8601 (timestamp),
             'symbol': symbol,
-            'order': undefined,
+            'order': orderId,
             'type': undefined,
             'side': side,
-            'takerOrMaker': undefined,
+            'takerOrMaker': takerOrMaker,
             'price': price,
             'amount': amount,
             'cost': cost,
-            'fee': undefined,
+            'fee': fee,
         }, market);
     }
 
@@ -622,14 +1080,11 @@ export default class bluefin extends Exchange {
         return this.safeString (sides, side, side);
     }
 
+    // ---- HTTP signing ----
+
     sign (path: string, api = 'public', method = 'GET', params: Dict = {}, headers: any = undefined, body: any = undefined): Dict {
-        //
-        // CCXT calls this for every HTTP request.  We attach auth headers
-        // only for private API groups (account, trade).
-        //
         let url = this.urls['api'][api] + '/' + path;
-        if (api === 'exchange' || api === 'auth') {
-            // Public endpoints — no auth header
+        if (api === 'exchange') {
             if (method === 'GET') {
                 if (Object.keys (params).length) {
                     url += '?' + this.urlencode (params);
@@ -638,16 +1093,28 @@ export default class bluefin extends Exchange {
                 headers = { 'Content-Type': 'application/json' };
                 body = this.json (params);
             }
+        } else if (api === 'auth') {
+            // Auth endpoints: route payloadSignature from params to header
+            const payloadSignature = this.safeString (params, 'payloadSignature');
+            const cleanParams = this.omit (params, [ 'payloadSignature' ]);
+            headers = { 'Content-Type': 'application/json' };
+            if (payloadSignature !== undefined) {
+                headers['payloadSignature'] = payloadSignature;
+            }
+            if (method === 'GET') {
+                if (Object.keys (cleanParams).length) {
+                    url += '?' + this.urlencode (cleanParams);
+                }
+            } else {
+                body = this.json (cleanParams);
+            }
         } else {
-            // Private endpoints — attach JWT bearer token
-            // TODO: call getAccessToken() (which may trigger
-            //       authenticate() or refreshAccessToken() as needed)
-            //
-            // const token = await this.getAccessToken ();
-            headers = {
-                'Content-Type': 'application/json',
-                // 'Authorization': 'Bearer ' + token,
-            };
+            // Private endpoints (account, trade): attach JWT bearer token
+            const token = this.safeString (this.options, 'accessToken');
+            headers = { 'Content-Type': 'application/json' };
+            if (token !== undefined) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
             if (method === 'GET') {
                 if (Object.keys (params).length) {
                     url += '?' + this.urlencode (params);
@@ -659,54 +1126,9 @@ export default class bluefin extends Exchange {
         return { 'url': url, 'method': method, 'body': body, 'headers': headers };
     }
 
-    async authenticate (params = {}): Promise<Dict> {
-        // TODO: Ed25519 login flow
-        //
-        //  1. Build LoginRequest:
-        //     { userAddress, audience: 'bluefin', timestamp }
-        //  2. Serialise and sign with Ed25519 (this.privateKey)
-        //     to produce a Sui personalMessage signature
-        //  3. POST to authPostAuthV2Token with:
-        //     { token: base64Signature, userAddress, audience, timestamp }
-        //  4. Store response: this.accessToken, this.refreshToken,
-        //     this.accessTokenExpiry, this.refreshTokenExpiry
-        //  5. Return { accessToken, refreshToken }
-        //
-        throw new Error ('authenticate not implemented');
-    }
-
-    async refreshAccessToken (params = {}): Promise<Dict> {
-        // TODO: call authPutAuthTokenRefresh with
-        //       { refreshToken: this.refreshToken }
-        //       Update stored tokens + expiry times
-        throw new Error ('refreshAccessToken not implemented');
-    }
-
-    async getAccessToken (): Promise<string> {
-        // TODO:
-        //  - If no access token → call authenticate()
-        //  - If access token near expiry (< 60s) → call refreshAccessToken()
-        //  - Return this.accessToken
-        throw new Error ('getAccessToken not implemented');
-    }
-
-    signRequest (fields: Dict): Dict {
-        // TODO: Ed25519 personal message signing for trade operations.
-        //
-        //  Used by createOrder, cancelOrder, setLeverage, withdraw, etc.
-        //
-        //  1. Deterministically serialise `fields` (sorted keys, specific
-        //     Bluefin encoding — see SDK source)
-        //  2. Sign with Ed25519 this.privateKey
-        //  3. Return { ...fields, signature: base64Signature, signer: walletAddress }
-        //
-        throw new Error ('signRequest not implemented');
-    }
+    // ---- Utility ----
 
     parseE9 (value: Str): Str {
-        // Bluefin stores prices/quantities as integer strings
-        // scaled by 1e9. Shift the decimal point 9 places right
-        // via Precise — no floating-point arithmetic involved.
         if (value === undefined) {
             return undefined;
         }
@@ -717,8 +1139,6 @@ export default class bluefin extends Exchange {
     }
 
     toE9 (value: Str): Str {
-        // Reverse of parseE9: shift decimal 9 places left to
-        // produce Bluefin's scaled-integer string.
         if (value === undefined) {
             return undefined;
         }
@@ -729,8 +1149,6 @@ export default class bluefin extends Exchange {
     }
 
     convertE9Levels (levels: any[]): any[][] {
-        // Convert [[priceE9, qtyE9], ...] to [[price, qty], ...]
-        // as string pairs for lossless order book construction.
         const result: any[][] = [];
         for (let i = 0; i < levels.length; i++) {
             const level = levels[i];
