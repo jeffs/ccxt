@@ -11,879 +11,747 @@ use ccxt\abstract\bluefin as Exchange;
 class bluefin extends Exchange {
 
     public function describe() {
-    return $this->deep_extend(parent::describe(), array(
-      "id" => "bluefin",
-      "name" => "Bluefin",
-      "countries" => ["SG"],
-      "version" => "v1",
-      "rateLimit" => 100,
-      "certified" => false,
-      "pro" => true,
-      "dex" => true,
-      // ----- credentials -----------------------------------------------
-      "requiredCredentials" => array(
-        "apiKey" => false,
-        "secret" => false,
-        "walletAddress" => true, // Sui Ed25519 address
-        "privateKey" => true, // Ed25519 private key
-      ),
-      // ----- capabilities ----------------------------------------------
-      "has" => array(
-        "CORS" => null,
-        "spot" => false,
-        "margin" => false,
-        "swap" => true,
-        "future" => false,
-        "option" => false,
-        // public
-        "fetchMarkets" => true,
-        "fetchTicker" => true,
-        "fetchTickers" => true,
-        "fetchOrderBook" => true,
-        "fetchTrades" => true,
-        "fetchOHLCV" => true,
-        "fetchFundingRateHistory" => true,
-        // private – account
-        "fetchBalance" => true,
-        "fetchPositions" => true,
-        "fetchMyTrades" => true,
-        "fetchOpenOrders" => true,
-        // private – trading
-        "createOrder" => true,
-        "cancelOrder" => true,
-        "cancelOrders" => true,
-        "setLeverage" => true,
-        "setMarginMode" => true,
-        "addMargin" => true,
-        "reduceMargin" => true,
-        "withdraw" => true,
-      ),
-      // ----- timeframes ------------------------------------------------
-      "timeframes" => array(
-        "1m" => "1m",
-        "3m" => "3m",
-        "5m" => "5m",
-        "15m" => "15m",
-        "30m" => "30m",
-        "1h" => "1h",
-        "2h" => "2h",
-        "4h" => "4h",
-        "6h" => "6h",
-        "8h" => "8h",
-        "12h" => "12h",
-        "1d" => "1d",
-        "3d" => "3d",
-        "1w" => "1w",
-        "1M" => "1Mo",
-      ),
-      // ----- URLs ------------------------------------------------------
-      "urls" => array(
-        "logo" => "https://bluefin.io/logo.svg",
-        "api" => array(
-          "auth" => "https://auth.api.sui-prod.bluefin.io",
-          "exchange" => "https://api.sui-prod.bluefin.io",
-          "account" => "https://api.sui-prod.bluefin.io",
-          "trade" => "https://trade.api.sui-prod.bluefin.io",
-        ),
-        "test" => array(
-          "auth" => "https://auth.api.sui-staging.bluefin.io",
-          "exchange" => "https://api.sui-staging.bluefin.io",
-          "account" => "https://api.sui-staging.bluefin.io",
-          "trade" => "https://trade.api.sui-staging.bluefin.io",
-        ),
-        "www" => "https://bluefin.io",
-        "doc" => array(
-          "https://bluefin-exchange.readme.io/reference",
-        ),
-        "fees" => "https://docs.bluefin.io/fees",
-      ),
-      // ----- API endpoint map ------------------------------------------
-      // Each key becomes an auto-generated method on the abstract class.
-      // Structure => array( group => array( method => array( path, ... ) ) )
-      "api" => array(
-        "exchange" => array(
-          "get" => array(
-            "v1/exchange/info",
-            "v1/exchange/depth",
-            "v1/exchange/ticker",
-            "v1/exchange/tickers",
-            "v1/exchange/trades",
-            "v1/exchange/candlesticks",
-            "v1/exchange/fundingRateHistory",
-          ),
-        ),
-        "auth" => array(
-          "post" => array(
-            "auth/token",
-            "auth/v2/token",
-          ),
-          "put" => array(
-            "auth/token/refresh",
-          ),
-        ),
-        "account" => array(
-          "get" => array(
-            "api/v1/account",
-            "api/v1/account/trades",
-            "api/v1/account/transactions",
-            "api/v1/account/fundingRateHistory",
-            "api/v1/trade/openOrders",
-            "api/v1/trade/standbyOrders",
-          ),
-        ),
-        "trade" => array(
-          "post" => array(
-            "api/v1/trade/orders",
-            "api/v1/trade/withdraw",
-          ),
-          "put" => array(
-            "api/v1/trade/orders/cancel",
-            "api/v1/trade/leverage",
-            "api/v1/trade/adjustIsolatedMargin",
-          ),
-        ),
-      ),
-      // ----- fees ------------------------------------------------------
-      "fees" => array(
-        "swap" => array(
-          "maker" => 0.0002, // 2 bps
-          "taker" => 0.0005, // 5 bps
-        ),
-      ),
-      // ----- precision -------------------------------------------------
-      "precisionMode" => TICK_SIZE,
-      // ----- options ---------------------------------------------------
-      "options" => array(
-        "defaultType" => "swap",
-        "sandboxMode" => false,
-      ),
-    ));
+        return $this->deep_extend(parent::describe(), array(
+            'id' => 'bluefin',
+            'name' => 'Bluefin',
+            'countries' => array( 'SG' ),
+            'version' => 'v1',
+            'rateLimit' => 100,
+            'certified' => false,
+            'pro' => true,
+            'dex' => true,
+            'requiredCredentials' => array(
+                'apiKey' => false,
+                'secret' => false,
+                'walletAddress' => true, // Sui Ed25519 address
+                'privateKey' => true, // Ed25519 private key
+            ),
+            'has' => array(
+                'CORS' => null,
+                'spot' => false,
+                'margin' => false,
+                'swap' => true,
+                'future' => false,
+                'option' => false,
+                'addMargin' => true,
+                'cancelOrder' => true,
+                'cancelOrders' => true,
+                'createOrder' => true,
+                'fetchBalance' => true,
+                'fetchFundingRateHistory' => true,
+                'fetchMarkets' => true,
+                'fetchMyTrades' => true,
+                'fetchOHLCV' => true,
+                'fetchOpenOrders' => true,
+                'fetchOrderBook' => true,
+                'fetchPositions' => true,
+                'fetchTicker' => true,
+                'fetchTickers' => true,
+                'fetchTrades' => true,
+                'reduceMargin' => true,
+                'setLeverage' => true,
+                'setMarginMode' => true,
+                'withdraw' => true,
+            ),
+            'timeframes' => array(
+                '1m' => '1m',
+                '3m' => '3m',
+                '5m' => '5m',
+                '15m' => '15m',
+                '30m' => '30m',
+                '1h' => '1h',
+                '2h' => '2h',
+                '4h' => '4h',
+                '6h' => '6h',
+                '8h' => '8h',
+                '12h' => '12h',
+                '1d' => '1d',
+                '3d' => '3d',
+                '1w' => '1w',
+                '1M' => '1Mo',
+            ),
+            'urls' => array(
+                'logo' => 'https://bluefin.io/logo.svg',
+                'api' => array(
+                    'auth' => 'https://auth.api.sui-prod.bluefin.io',
+                    'exchange' => 'https://api.sui-prod.bluefin.io',
+                    'account' => 'https://api.sui-prod.bluefin.io',
+                    'trade' => 'https://trade.api.sui-prod.bluefin.io',
+                ),
+                'test' => array(
+                    'auth' => 'https://auth.api.sui-staging.bluefin.io',
+                    'exchange' => 'https://api.sui-staging.bluefin.io',
+                    'account' => 'https://api.sui-staging.bluefin.io',
+                    'trade' => 'https://trade.api.sui-staging.bluefin.io',
+                ),
+                'www' => 'https://bluefin.io',
+                'doc' => array(
+                    'https://bluefin-exchange.readme.io/reference',
+                ),
+                'fees' => 'https://docs.bluefin.io/fees',
+            ),
+            'api' => array(
+                'exchange' => array(
+                    'get' => array(
+                        'v1/exchange/info',
+                        'v1/exchange/depth',
+                        'v1/exchange/ticker',
+                        'v1/exchange/tickers',
+                        'v1/exchange/trades',
+                        'v1/exchange/candlesticks',
+                        'v1/exchange/fundingRateHistory',
+                    ),
+                ),
+                'auth' => array(
+                    'post' => array(
+                        'auth/token',
+                        'auth/v2/token',
+                    ),
+                    'put' => array(
+                        'auth/token/refresh',
+                    ),
+                ),
+                'account' => array(
+                    'get' => array(
+                        'api/v1/account',
+                        'api/v1/account/trades',
+                        'api/v1/account/transactions',
+                        'api/v1/account/fundingRateHistory',
+                        'api/v1/trade/openOrders',
+                        'api/v1/trade/standbyOrders',
+                    ),
+                ),
+                'trade' => array(
+                    'post' => array(
+                        'api/v1/trade/orders',
+                        'api/v1/trade/withdraw',
+                    ),
+                    'put' => array(
+                        'api/v1/trade/orders/cancel',
+                        'api/v1/trade/leverage',
+                        'api/v1/trade/adjustIsolatedMargin',
+                    ),
+                ),
+            ),
+            'fees' => array(
+                'swap' => array(
+                    'maker' => 0.0002, // 2 bps
+                    'taker' => 0.0005, // 5 bps
+                ),
+            ),
+            'precisionMode' => TICK_SIZE,
+            'options' => array(
+                'defaultType' => 'swap',
+                'sandboxMode' => false,
+            ),
+        ));
     }
 
     public function fetch_markets($params = array ()): array {
-    $response = $this->exchangeGetV1ExchangeInfo($params);
-    $markets = $this->safe_list($response, "markets", array());
-    $result => Marketarray() = array();
-    for ($i = 0; $i < count($markets); $i++) {
-      $result[] = $this->parse_market($markets[$i]);
-    }
-    return $result;
+        $response = $this->exchangeGetV1ExchangeInfo ($params);
+        $markets = $this->safe_list($response, 'markets', array());
+        $result => Marketarray() = array();
+        for ($i = 0; $i < count($markets); $i++) {
+            $result[] = $this->parse_market($markets[$i]);
+        }
+        return $result;
     }
 
     public function fetch_ticker(string $symbol, $params = array ()): array {
-    $this->load_markets();
-    $market = $this->market($symbol);
-    $request = array(
-      "symbol" => $this->bluefin_symbol($symbol),
-    );
-    $response = $this->exchangeGetV1ExchangeTicker(
-      $this->extend($request, $params),
-    );
-    return $this->parse_ticker($response, $market);
+        $this->load_markets();
+        $market = $this->market($symbol);
+        $request = array(
+            'symbol' => $this->bluefin_symbol($symbol),
+        );
+        $response = $this->exchangeGetV1ExchangeTicker ($this->extend($request, $params));
+        return $this->parse_ticker($response, $market);
     }
 
     public function fetch_tickers(?array $symbols = null, $params = array ()): array {
-    $this->load_markets();
-    $response = $this->exchangeGetV1ExchangeTickers($params);
-    $result => Tickers = array();
-    for ($i = 0; $i < count($response); $i++) {
-      $ticker = $this->parse_ticker($response[$i]);
-      $symbol = $ticker["symbol"];
-      if ($symbols !== null && !$this->in_array($symbol, $symbols)) {
-        continue;
-      }
-      $result[$symbol] = $ticker;
-    }
-    return $result;
+        $this->load_markets();
+        $response = $this->exchangeGetV1ExchangeTickers ($params);
+        $result => Tickers = array();
+        for ($i = 0; $i < count($response); $i++) {
+            $ticker = $this->parse_ticker($response[$i]);
+            $symbol = $ticker['symbol'];
+            if ($symbols !== null && !$this->in_array($symbol, $symbols)) {
+                continue;
+            }
+            $result[$symbol] = $ticker;
+        }
+        return $result;
     }
 
     public function fetch_order_book(string $symbol, ?int $limit = null, $params = array ()): array {
-    $request = array(
-      "symbol" => str_replace("/USDC:USDC", "-PERP", $symbol),
-    );
-    if ($limit !== null) {
-      $request["limit"] = $limit;
-    }
-    $response = $this->exchangeGetV1ExchangeDepth(
-      $this->extend($request, $params),
-    );
-    $timestamp = $this->safe_integer($response, "updatedAtMillis");
-    $nonce = $this->safe_integer($response, "lastUpdateId");
-    // bidsE9/asksE9 are arrays of [priceE9, qtyE9] strings;
-    // convert to plain floats before parseOrderBook.
-    $rawBids = $this->safe_list($response, "bidsE9", array());
-    $rawAsks = $this->safe_list($response, "asksE9", array());
-    $bids = $this->convert_e9_levels($rawBids);
-    $asks = $this->convert_e9_levels($rawAsks);
-    $orderbook = $this->parse_order_book(
-      array( "bids" => $bids, "asks" => $asks ),
-      $symbol,
-      $timestamp,
-      "bids",
-      "asks",
-      0,
-      1,
-    );
-    $orderbook["nonce"] = $nonce;
-    return $orderbook;
+        $request = array(
+            'symbol' => str_replace('/USDC:USDC', '-PERP', $symbol),
+        );
+        if ($limit !== null) {
+            $request['limit'] = $limit;
+        }
+        $response = $this->exchangeGetV1ExchangeDepth ($this->extend($request, $params));
+        $timestamp = $this->safe_integer($response, 'updatedAtMillis');
+        $nonce = $this->safe_integer($response, 'lastUpdateId');
+        // bidsE9/asksE9 are arrays of [priceE9, qtyE9] strings;
+        // convert to plain floats before parseOrderBook.
+        $rawBids = $this->safe_list($response, 'bidsE9', array());
+        $rawAsks = $this->safe_list($response, 'asksE9', array());
+        $bids = $this->convert_e9_levels($rawBids);
+        $asks = $this->convert_e9_levels($rawAsks);
+        $orderbook = $this->parse_order_book(array( 'bids' => $bids, 'asks' => $asks ), $symbol, $timestamp, 'bids', 'asks', 0, 1);
+        $orderbook['nonce'] = $nonce;
+        return $orderbook;
     }
 
     public function fetch_trades(string $symbol, ?int $since = null, ?int $limit = null, $params = array ()): array {
-    $this->load_markets();
-    $market = $this->market($symbol);
-    $request = array(
-      "symbol" => $this->bluefin_symbol($symbol),
-    );
-    if ($limit !== null) {
-      $request["limit"] = $limit;
-    }
-    $response = $this->exchangeGetV1ExchangeTrades(
-      $this->extend($request, $params),
-    );
-    $result => Tradearray() = array();
-    for ($i = 0; $i < count($response); $i++) {
-      $result[] = $this->parse_trade($response[$i], $market);
-    }
-    return $result;
+        $this->load_markets();
+        $market = $this->market($symbol);
+        $request = array(
+            'symbol' => $this->bluefin_symbol($symbol),
+        );
+        if ($limit !== null) {
+            $request['limit'] = $limit;
+        }
+        $response = $this->exchangeGetV1ExchangeTrades ($this->extend($request, $params));
+        $result => Tradearray() = array();
+        for ($i = 0; $i < count($response); $i++) {
+            $result[] = $this->parse_trade($response[$i], $market);
+        }
+        return $result;
     }
 
-    public function fetch_ohlcv(string $symbol, $timeframe = "1m", ?int $since = null, ?int $limit = null, $params = array ()): array {
-    $this->load_markets();
-    $market = $this->market($symbol);
-    $request = array(
-      "symbol" => $this->bluefin_symbol($symbol),
-      "interval" => $this->safe_string($this->timeframes, $timeframe, $timeframe),
-    );
-    if ($since !== null) {
-      $request["startTime"] = $since;
-    }
-    if ($limit !== null) {
-      $request["limit"] = $limit;
-    }
-    $response = $this->exchangeGetV1ExchangeCandlesticks(
-      $this->extend($request, $params),
-    );
-    $result => OHLCVarray() = array();
-    for ($i = 0; $i < count($response); $i++) {
-      $result[] = $this->parse_ohlcv($response[$i], $market);
-    }
-    return $result;
+    public function fetch_ohlcv(string $symbol, $timeframe = '1m', ?int $since = null, ?int $limit = null, $params = array ()): array {
+        $this->load_markets();
+        $market = $this->market($symbol);
+        $request = array(
+            'symbol' => $this->bluefin_symbol($symbol),
+            'interval' => $this->safe_string($this->timeframes, $timeframe, $timeframe),
+        );
+        if ($since !== null) {
+            $request['startTime'] = $since;
+        }
+        if ($limit !== null) {
+            $request['limit'] = $limit;
+        }
+        $response = $this->exchangeGetV1ExchangeCandlesticks ($this->extend($request, $params));
+        $result => OHLCVarray() = array();
+        for ($i = 0; $i < count($response); $i++) {
+            $result[] = $this->parse_ohlcv($response[$i], $market);
+        }
+        return $result;
     }
 
     public function fetch_funding_rate_history(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = array ()): array {
-    $request = array();
-    if ($symbol !== null) {
-      $request["symbol"] = str_replace("/USDC:USDC", "-PERP", $symbol);
-    }
-    if ($since !== null) {
-      $request["startTime"] = $since;
-    }
-    if ($limit !== null) {
-      $request["limit"] = $limit;
-    }
-    $response = $this->exchangeGetV1ExchangeFundingRateHistory(
-      $this->extend($request, $params),
-    );
-    $result => FundingRateHistoryarray() = array();
-    for ($i = 0; $i < count($response); $i++) {
-      $result[] = $this->parse_funding_rate_history($response[$i]);
-    }
-    return $result;
+        $request = array();
+        if ($symbol !== null) {
+            $request['symbol'] = str_replace('/USDC:USDC', '-PERP', $symbol);
+        }
+        if ($since !== null) {
+            $request['startTime'] = $since;
+        }
+        if ($limit !== null) {
+            $request['limit'] = $limit;
+        }
+        $response = $this->exchangeGetV1ExchangeFundingRateHistory ($this->extend($request, $params));
+        $result => FundingRateHistoryarray() = array();
+        for ($i = 0; $i < count($response); $i++) {
+            $result[] = $this->parse_funding_rate_history($response[$i]);
+        }
+        return $result;
     }
 
     public function fetch_balance($params = array ()): array {
-    // TODO => call accountGetApiV1Account (needs JWT),
-    //       parse via parseBalance
-    //
-    // $this->load_markets();
-    // $response = $this->accountGetApiV1Account ($params);
-    // return $this->parse_balance($response);
-    throw new Error("fetchBalance not implemented");
+        // TODO => call accountGetApiV1Account (needs JWT),
+        //       parse via parseBalance
+        //
+        // $this->load_markets();
+        // $response = $this->accountGetApiV1Account ($params);
+        // return $this->parse_balance($response);
+        throw new \Exception('fetchBalance not implemented');
     }
 
     public function fetch_positions(?array $symbols = null, $params = array ()): array {
-    // TODO => call accountGetApiV1Account (needs JWT),
-    //       extract positions array, parse each via parsePosition
-    throw new Error("fetchPositions not implemented");
+        // TODO => call accountGetApiV1Account (needs JWT),
+        //       extract positions array, parse each via parsePosition
+        throw new \Exception('fetchPositions not implemented');
     }
 
     public function fetch_my_trades(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = array ()): array {
-    // TODO => call accountGetApiV1AccountTrades (needs JWT),
-    //       parse each via parseTrade
-    throw new Error("fetchMyTrades not implemented");
+        // TODO => call accountGetApiV1AccountTrades (needs JWT),
+        //       parse each via parseTrade
+        throw new \Exception('fetchMyTrades not implemented');
     }
 
     public function fetch_open_orders(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = array ()): array {
-    // TODO => call accountGetApiV1TradeOpenOrders (needs JWT),
-    //       parse each via parseOrder
-    throw new Error("fetchOpenOrders not implemented");
+        // TODO => call accountGetApiV1TradeOpenOrders (needs JWT),
+        //       parse each via parseOrder
+        throw new \Exception('fetchOpenOrders not implemented');
     }
 
     public function create_order(string $symbol, string $type, string $side, float $amount, ?float $price = null, $params = array ()): array {
-    // TODO:
-    //  1. loadMarkets, resolve market
-    //  2. Build signedFields:
-    //     { market, $price (E9), quantity (E9), leverage (E9),
-    //       $side => BUY/SELL, reduceOnly, salt, expiration, orderType }
-    //  3. Sign fields with Ed25519 via signRequest()
-    //  4. POST to tradePostApiV1TradeOrders with signed payload . JWT
-    //  5. Parse response via parseOrder
-    throw new Error("createOrder not implemented");
+        // TODO:
+        //  1. loadMarkets, resolve market
+        //  2. Build signedFields:
+        //     { market, $price (E9), quantity (E9), leverage (E9),
+        //       $side => BUY/SELL, reduceOnly, salt, expiration, orderType }
+        //  3. Sign fields with Ed25519 via signRequest()
+        //  4. POST to tradePostApiV1TradeOrders with signed payload . JWT
+        //  5. Parse response via parseOrder
+        throw new \Exception('createOrder not implemented');
     }
 
     public function cancel_order(string $id, ?string $symbol = null, $params = array ()): array {
-    // TODO => build cancel payload with orderId(s),
-    //       sign via signRequest, PUT to tradePutApiV1TradeOrdersCancel
-    throw new Error("cancelOrder not implemented");
+        // TODO => build cancel payload with orderId(s),
+        //       sign via signRequest, PUT to tradePutApiV1TradeOrdersCancel
+        throw new \Exception('cancelOrder not implemented');
     }
 
     public function cancel_orders(array $ids, ?string $symbol = null, $params = array ()): array {
-    // TODO => batch cancel — same endpoint, multiple orderIds
-    throw new Error("cancelOrders not implemented");
+        // TODO => batch cancel — same endpoint, multiple orderIds
+        throw new \Exception('cancelOrders not implemented');
     }
 
     public function set_leverage(?int $leverage, ?string $symbol = null, $params = array ()): mixed {
-    // TODO => build payload array( $symbol, leverageE9 => toE9($leverage) ),
-    //       sign with signRequest, PUT to tradePutApiV1TradeLeverage
-    throw new Error("setLeverage not implemented");
+        // TODO => build payload array( $symbol, leverageE9 => toE9($leverage) ),
+        //       sign with signRequest, PUT to tradePutApiV1TradeLeverage
+        throw new \Exception('setLeverage not implemented');
     }
 
     public function set_margin_mode(string $marginMode, ?string $symbol = null, $params = array ()): mixed {
-    // TODO => Bluefin sets margin mode via the leverage endpoint
-    //       (isolated vs cross is a field on the leverage request)
-    throw new Error("setMarginMode not implemented");
+        // TODO => Bluefin sets margin mode via the leverage endpoint
+        //       (isolated vs cross is a field on the leverage request)
+        throw new \Exception('setMarginMode not implemented');
     }
 
     public function add_margin(string $symbol, float $amount, $params = array ()): mixed {
-    // TODO => PUT to tradePutApiV1TradeAdjustIsolatedMargin
-    //       with positive $amount (E9)
-    throw new Error("addMargin not implemented");
+        // TODO => PUT to tradePutApiV1TradeAdjustIsolatedMargin
+        //       with positive $amount (E9)
+        throw new \Exception('addMargin not implemented');
     }
 
     public function reduce_margin(string $symbol, float $amount, $params = array ()): mixed {
-    // TODO => PUT to tradePutApiV1TradeAdjustIsolatedMargin
-    //       with negative $amount (E9)
-    throw new Error("reduceMargin not implemented");
+        // TODO => PUT to tradePutApiV1TradeAdjustIsolatedMargin
+        //       with negative $amount (E9)
+        throw new \Exception('reduceMargin not implemented');
     }
 
     public function withdraw(string $code, float $amount, string $address, ?string $tag = null, $params = array ()): mixed {
-    // TODO => POST to tradePostApiV1TradeWithdraw, signed
-    throw new Error("withdraw not implemented");
+        // TODO => POST to tradePostApiV1TradeWithdraw, signed
+        throw new \Exception('withdraw not implemented');
     }
 
     public function parse_market(array $market): array {
-    $id = $this->safe_string($market, "symbol");
-    $base = $this->safe_string($market, "baseAssetSymbol");
-    $quote = "USDC";
-    $settle = "USDC";
-    $symbol = $base . "/" . $quote . ":" . $settle;
-    $status = $this->safe_string($market, "status");
-    return $this->safe_market_structure(array(
-      "id" => $id,
-      "symbol" => $symbol,
-      "base" => $base,
-      "quote" => $quote,
-      "settle" => $settle,
-      "baseId" => $base,
-      "quoteId" => $quote,
-      "settleId" => $settle,
-      "type" => "swap",
-      "spot" => false,
-      "margin" => false,
-      "swap" => true,
-      "future" => false,
-      "option" => false,
-      "contract" => true,
-      "linear" => true,
-      "inverse" => false,
-      "active" => $status === "ACTIVE",
-      "contractSize" => $this->parse_number("1"),
-      "precision" => array(
-        "price" => $this->parse_e9($this->safe_string($market, "tickSizeE9")),
-        "amount" => $this->parse_e9($this->safe_string($market, "stepSizeE9")),
-      ),
-      "limits" => array(
-        "amount" => array(
-          "min" => $this->parse_e9($this->safe_string($market, "minOrderQuantityE9")),
-          "max" => $this->parse_e9(
-            $this->safe_string($market, "maxLimitOrderQuantityE9"),
-          ),
-        ),
-        "price" => array(
-          "min" => $this->parse_e9($this->safe_string($market, "minOrderPriceE9")),
-          "max" => $this->parse_e9($this->safe_string($market, "maxOrderPriceE9")),
-        ),
-        "leverage" => array(
-          "min" => $this->parse_number("1"),
-          "max" => $this->parse_e9($this->safe_string($market, "defaultLeverageE9")),
-        ),
-      ),
-      "info" => $market,
-    ));
+        $id = $this->safe_string($market, 'symbol');
+        $base = $this->safe_string($market, 'baseAssetSymbol');
+        $quote = 'USDC';
+        $settle = 'USDC';
+        $symbol = $base . '/' . $quote . ':' . $settle;
+        $status = $this->safe_string($market, 'status');
+        return $this->safe_market_structure(array(
+            'id' => $id,
+            'symbol' => $symbol,
+            'base' => $base,
+            'quote' => $quote,
+            'settle' => $settle,
+            'baseId' => $base,
+            'quoteId' => $quote,
+            'settleId' => $settle,
+            'type' => 'swap',
+            'spot' => false,
+            'margin' => false,
+            'swap' => true,
+            'future' => false,
+            'option' => false,
+            'contract' => true,
+            'linear' => true,
+            'inverse' => false,
+            'active' => $status === 'ACTIVE',
+            'contractSize' => $this->parse_number('1'),
+            'precision' => array(
+                'price' => $this->parse_e9($this->safe_string($market, 'tickSizeE9')),
+                'amount' => $this->parse_e9($this->safe_string($market, 'stepSizeE9')),
+            ),
+            'limits' => array(
+                'amount' => array(
+                    'min' => $this->parse_e9($this->safe_string($market, 'minOrderQuantityE9')),
+                    'max' => $this->parse_e9($this->safe_string($market, 'maxLimitOrderQuantityE9')),
+                ),
+                'price' => array(
+                    'min' => $this->parse_e9($this->safe_string($market, 'minOrderPriceE9')),
+                    'max' => $this->parse_e9($this->safe_string($market, 'maxOrderPriceE9')),
+                ),
+                'leverage' => array(
+                    'min' => $this->parse_number('1'),
+                    'max' => $this->parse_e9($this->safe_string($market, 'defaultLeverageE9')),
+                ),
+            ),
+            'info' => $market,
+        ));
     }
 
     public function parse_ticker(array $ticker, ?array $market = null): array {
-    $bluefinSym = $this->safe_string($ticker, "symbol");
-    $symbol = ($bluefinSym !== null)
-      ? $this->ccxt_symbol($bluefinSym)
-      : null;
-    $last = $this->parse_e9(
-      $this->safe_string($ticker, "lastPriceE9"),
-    );
-    $mark = $this->parse_e9(
-      $this->safe_string($ticker, "markPriceE9"),
-    );
-    $index = $this->parse_e9(
-      $this->safe_string($ticker, "oraclePriceE9"),
-    );
-    $high = $this->parse_e9(
-      $this->safe_string($ticker, "highPrice24hrE9"),
-    );
-    $low = $this->parse_e9(
-      $this->safe_string($ticker, "lowPrice24hrE9"),
-    );
-    $open = $this->parse_e9(
-      $this->safe_string($ticker, "openPrice24hrE9"),
-    );
-    $close = $last;
-    $bid = $this->parse_e9(
-      $this->safe_string($ticker, "bestBidPriceE9"),
-    );
-    $ask = $this->parse_e9(
-      $this->safe_string($ticker, "bestAskPriceE9"),
-    );
-    $bidVolume = $this->parse_e9(
-      $this->safe_string($ticker, "bestBidQuantityE9"),
-    );
-    $askVolume = $this->parse_e9(
-      $this->safe_string($ticker, "bestAskQuantityE9"),
-    );
-    $baseVolume = $this->parse_e9(
-      $this->safe_string($ticker, "volume24hrE9"),
-    );
-    $quoteVolume = $this->parse_e9(
-      $this->safe_string($ticker, "quoteVolume24hrE9"),
-    );
-    $change = $this->parse_e9(
-      $this->safe_string($ticker, "priceChange24hrE9"),
-    );
-    $percentRaw = $this->parse_e9(
-      $this->safe_string($ticker, "priceChangePercent24hrE9"),
-    );
-    $percentage = Precise.stringMul($percentRaw, "100");
-    $timestamp = $this->safe_integer(
-      $ticker,
-      "lastTimeAtMillis",
-    );
-    return $this->safe_ticker(array(
-      "symbol" => $symbol,
-      "timestamp" => $timestamp,
-      "datetime" => $this->iso8601($timestamp),
-      "high" => $high,
-      "low" => $low,
-      "bid" => $bid,
-      "bidVolume" => $bidVolume,
-      "ask" => $ask,
-      "askVolume" => $askVolume,
-      "vwap" => null,
-      "open" => $open,
-      "close" => $close,
-      "last" => $last,
-      "previousClose" => null,
-      "change" => $change,
-      "percentage" => $percentage,
-      "average" => null,
-      "baseVolume" => $baseVolume,
-      "quoteVolume" => $quoteVolume,
-      "markPrice" => $mark,
-      "indexPrice" => $index,
-      "mark" => $mark,
-      "index" => $index,
-      "info" => $ticker,
-    ), $market);
+        $bluefinSym = $this->safe_string($ticker, 'symbol');
+        $symbol = ($bluefinSym !== null) ? $this->ccxt_symbol($bluefinSym) : null;
+        $last = $this->parse_e9($this->safe_string($ticker, 'lastPriceE9'));
+        $mark = $this->parse_e9($this->safe_string($ticker, 'markPriceE9'));
+        $index = $this->parse_e9($this->safe_string($ticker, 'oraclePriceE9'));
+        $high = $this->parse_e9($this->safe_string($ticker, 'highPrice24hrE9'));
+        $low = $this->parse_e9($this->safe_string($ticker, 'lowPrice24hrE9'));
+        $open = $this->parse_e9($this->safe_string($ticker, 'openPrice24hrE9'));
+        $close = $last;
+        $bid = $this->parse_e9($this->safe_string($ticker, 'bestBidPriceE9'));
+        $ask = $this->parse_e9($this->safe_string($ticker, 'bestAskPriceE9'));
+        $bidVolume = $this->parse_e9($this->safe_string($ticker, 'bestBidQuantityE9'));
+        $askVolume = $this->parse_e9($this->safe_string($ticker, 'bestAskQuantityE9'));
+        $baseVolume = $this->parse_e9($this->safe_string($ticker, 'volume24hrE9'));
+        $quoteVolume = $this->parse_e9($this->safe_string($ticker, 'quoteVolume24hrE9'));
+        $change = $this->parse_e9($this->safe_string($ticker, 'priceChange24hrE9'));
+        $percentRaw = $this->parse_e9($this->safe_string($ticker, 'priceChangePercent24hrE9'));
+        $percentage = Precise::string_mul($percentRaw, '100');
+        $timestamp = $this->safe_integer($ticker, 'lastTimeAtMillis');
+        return $this->safe_ticker(array(
+            'symbol' => $symbol,
+            'timestamp' => $timestamp,
+            'datetime' => $this->iso8601($timestamp),
+            'high' => $high,
+            'low' => $low,
+            'bid' => $bid,
+            'bidVolume' => $bidVolume,
+            'ask' => $ask,
+            'askVolume' => $askVolume,
+            'vwap' => null,
+            'open' => $open,
+            'close' => $close,
+            'last' => $last,
+            'previousClose' => null,
+            'change' => $change,
+            'percentage' => $percentage,
+            'average' => null,
+            'baseVolume' => $baseVolume,
+            'quoteVolume' => $quoteVolume,
+            'markPrice' => $mark,
+            'indexPrice' => $index,
+            'mark' => $mark,
+            'index' => $index,
+            'info' => $ticker,
+        ), $market);
     }
 
     public function parse_trade(array $trade, ?array $market = null): array {
-    $id = $this->safe_string($trade, "id");
-    $bluefinSym = $this->safe_string($trade, "symbol");
-    $symbol = ($bluefinSym !== null)
-      ? $this->ccxt_symbol($bluefinSym)
-      : null;
-    $price = $this->parse_e9(
-      $this->safe_string($trade, "priceE9"),
-    );
-    $amount = $this->parse_e9(
-      $this->safe_string($trade, "quantityE9"),
-    );
-    $cost = $this->parse_e9(
-      $this->safe_string($trade, "quoteQuantityE9"),
-    );
-    $side = $this->parse_order_side(
-      $this->safe_string($trade, "side"),
-    );
-    $timestamp = $this->safe_integer(
-      $trade,
-      "executedAtMillis",
-    );
-    return $this->safe_trade(array(
-      "id" => $id,
-      "info" => $trade,
-      "timestamp" => $timestamp,
-      "datetime" => $this->iso8601($timestamp),
-      "symbol" => $symbol,
-      "order" => null,
-      "type" => null,
-      "side" => $side,
-      "takerOrMaker" => null,
-      "price" => $price,
-      "amount" => $amount,
-      "cost" => $cost,
-      "fee" => null,
-    ), $market);
+        $id = $this->safe_string($trade, 'id');
+        $bluefinSym = $this->safe_string($trade, 'symbol');
+        $symbol = ($bluefinSym !== null) ? $this->ccxt_symbol($bluefinSym) : null;
+        $price = $this->parse_e9($this->safe_string($trade, 'priceE9'));
+        $amount = $this->parse_e9($this->safe_string($trade, 'quantityE9'));
+        $cost = $this->parse_e9($this->safe_string($trade, 'quoteQuantityE9'));
+        $side = $this->parse_order_side($this->safe_string($trade, 'side'));
+        $timestamp = $this->safe_integer($trade, 'executedAtMillis');
+        return $this->safe_trade(array(
+            'id' => $id,
+            'info' => $trade,
+            'timestamp' => $timestamp,
+            'datetime' => $this->iso8601($timestamp),
+            'symbol' => $symbol,
+            'order' => null,
+            'type' => null,
+            'side' => $side,
+            'takerOrMaker' => null,
+            'price' => $price,
+            'amount' => $amount,
+            'cost' => $cost,
+            'fee' => null,
+        ), $market);
     }
 
     public function parse_order(array $order, ?array $market = null): array {
-    $id = $this->safe_string($order, "orderHash");
-    $clientOrderId = $this->safe_string($order, "clientOrderId");
-    $bluefinSym = $this->safe_string($order, "symbol");
-    $symbol = ($bluefinSym !== null)
-      ? $this->ccxt_symbol($bluefinSym)
-      : null;
-    $rawType = $this->safe_string_lower($order, "type");
-    $side = $this->parse_order_side(
-      $this->safe_string($order, "side"),
-    );
-    $price = $this->parse_e9(
-      $this->safe_string($order, "priceE9"),
-    );
-    $amount = $this->parse_e9(
-      $this->safe_string($order, "quantityE9"),
-    );
-    $filled = $this->parse_e9(
-      $this->safe_string($order, "filledQuantityE9"),
-    );
-    $status = $this->parse_order_status(
-      $this->safe_string($order, "status"),
-    );
-    $timeInForce = $this->safe_string($order, "timeInForce");
-    $postOnly = $this->safe_bool($order, "postOnly");
-    $reduceOnly = $this->safe_bool($order, "reduceOnly");
-    $timestamp = $this->safe_integer(
-      $order,
-      "orderTimeAtMillis",
-    );
-    return $this->safe_order(array(
-      "id" => $id,
-      "clientOrderId" => $clientOrderId,
-      "info" => $order,
-      "timestamp" => $timestamp,
-      "datetime" => $this->iso8601($timestamp),
-      "lastTradeTimestamp" => null,
-      "symbol" => $symbol,
-      "type" => $rawType,
-      "timeInForce" => $timeInForce,
-      "postOnly" => $postOnly,
-      "reduceOnly" => $reduceOnly,
-      "side" => $side,
-      "price" => $price,
-      "amount" => $amount,
-      "filled" => $filled,
-      "remaining" => null,
-      "cost" => null,
-      "average" => null,
-      "status" => $status,
-      "fee" => null,
-      "trades" => null,
-    ), $market);
+        $id = $this->safe_string($order, 'orderHash');
+        $clientOrderId = $this->safe_string($order, 'clientOrderId');
+        $bluefinSym = $this->safe_string($order, 'symbol');
+        $symbol = ($bluefinSym !== null) ? $this->ccxt_symbol($bluefinSym) : null;
+        $rawType = $this->safe_string_lower($order, 'type');
+        $side = $this->parse_order_side($this->safe_string($order, 'side'));
+        $price = $this->parse_e9($this->safe_string($order, 'priceE9'));
+        $amount = $this->parse_e9($this->safe_string($order, 'quantityE9'));
+        $filled = $this->parse_e9($this->safe_string($order, 'filledQuantityE9'));
+        $status = $this->parse_order_status($this->safe_string($order, 'status'));
+        $timeInForce = $this->safe_string($order, 'timeInForce');
+        $postOnly = $this->safe_bool($order, 'postOnly');
+        $reduceOnly = $this->safe_bool($order, 'reduceOnly');
+        $timestamp = $this->safe_integer($order, 'orderTimeAtMillis');
+        return $this->safe_order(array(
+            'id' => $id,
+            'clientOrderId' => $clientOrderId,
+            'info' => $order,
+            'timestamp' => $timestamp,
+            'datetime' => $this->iso8601($timestamp),
+            'lastTradeTimestamp' => null,
+            'symbol' => $symbol,
+            'type' => $rawType,
+            'timeInForce' => $timeInForce,
+            'postOnly' => $postOnly,
+            'reduceOnly' => $reduceOnly,
+            'side' => $side,
+            'price' => $price,
+            'amount' => $amount,
+            'filled' => $filled,
+            'remaining' => null,
+            'cost' => null,
+            'average' => null,
+            'status' => $status,
+            'fee' => null,
+            'trades' => null,
+        ), $market);
     }
 
     public function parse_position(array $position, ?array $market = null): array {
-    $bluefinSym = $this->safe_string($position, "symbol");
-    $symbol = ($bluefinSym !== null)
-      ? $this->ccxt_symbol($bluefinSym)
-      : null;
-    $rawSide = $this->safe_string($position, "side");
-    $side = ($rawSide !== null) ? strtolower($rawSide) : null;
-    $contracts = $this->parse_e9(
-      $this->safe_string($position, "sizeE9"),
-    );
-    $entryPrice = $this->parse_e9(
-      $this->safe_string($position, "avgEntryPriceE9"),
-    );
-    $markPrice = $this->parse_e9(
-      $this->safe_string($position, "markPriceE9"),
-    );
-    $liquidationPrice = $this->parse_e9(
-      $this->safe_string($position, "liquidationPriceE9"),
-    );
-    $notional = $this->parse_e9(
-      $this->safe_string($position, "notionalValueE9"),
-    );
-    $unrealizedPnl = $this->parse_e9(
-      $this->safe_string($position, "unrealizedPnlE9"),
-    );
-    $initialMargin = $this->parse_e9(
-      $this->safe_string($position, "marginRequiredE9"),
-    );
-    $maintenanceMargin = $this->parse_e9(
-      $this->safe_string($position, "maintenanceMarginE9"),
-    );
-    $leverage = $this->parse_e9(
-      $this->safe_string($position, "clientSetLeverageE9"),
-    );
-    $isIsolated = $this->safe_bool($position, "isIsolated");
-    $marginMode = $isIsolated ? "isolated" : "cross";
-    $collateral = $isIsolated
-      ? $this->parse_e9(
-        $this->safe_string($position, "isolatedMarginE9"),
-      )
-      : $initialMargin;
-    $timestamp = $this->safe_integer(
-      $position,
-      "updatedAtMillis",
-    );
-    return $this->safe_position(array(
-      "id" => null,
-      "symbol" => $symbol,
-      "timestamp" => $timestamp,
-      "datetime" => $this->iso8601($timestamp),
-      "contracts" => $contracts,
-      "contractSize" => null,
-      "side" => $side,
-      "notional" => $notional,
-      "leverage" => $leverage,
-      "unrealizedPnl" => $unrealizedPnl,
-      "realizedPnl" => null,
-      "collateral" => $collateral,
-      "entryPrice" => $entryPrice,
-      "markPrice" => $markPrice,
-      "liquidationPrice" => $liquidationPrice,
-      "marginMode" => $marginMode,
-      "hedged" => null,
-      "maintenanceMargin" => $maintenanceMargin,
-      "maintenanceMarginPercentage" => null,
-      "initialMargin" => $initialMargin,
-      "initialMarginPercentage" => null,
-      "marginRatio" => null,
-      "percentage" => null,
-      "stopLossPrice" => null,
-      "takeProfitPrice" => null,
-      "info" => $position,
-    ));
+        $bluefinSym = $this->safe_string($position, 'symbol');
+        $symbol = ($bluefinSym !== null) ? $this->ccxt_symbol($bluefinSym) : null;
+        $rawSide = $this->safe_string($position, 'side');
+        $side = ($rawSide !== null) ? strtolower($rawSide) : null;
+        $contracts = $this->parse_e9($this->safe_string($position, 'sizeE9'));
+        $entryPrice = $this->parse_e9($this->safe_string($position, 'avgEntryPriceE9'));
+        $markPrice = $this->parse_e9($this->safe_string($position, 'markPriceE9'));
+        $liquidationPrice = $this->parse_e9($this->safe_string($position, 'liquidationPriceE9'));
+        $notional = $this->parse_e9($this->safe_string($position, 'notionalValueE9'));
+        $unrealizedPnl = $this->parse_e9($this->safe_string($position, 'unrealizedPnlE9'));
+        $initialMargin = $this->parse_e9($this->safe_string($position, 'marginRequiredE9'));
+        $maintenanceMargin = $this->parse_e9($this->safe_string($position, 'maintenanceMarginE9'));
+        $leverage = $this->parse_e9($this->safe_string($position, 'clientSetLeverageE9'));
+        $isIsolated = $this->safe_bool($position, 'isIsolated');
+        $marginMode = $isIsolated ? 'isolated' : 'cross';
+        $collateral = $isIsolated
+            ? $this->parse_e9($this->safe_string($position, 'isolatedMarginE9'))
+            : $initialMargin;
+        $timestamp = $this->safe_integer($position, 'updatedAtMillis');
+        return $this->safe_position(array(
+            'id' => null,
+            'symbol' => $symbol,
+            'timestamp' => $timestamp,
+            'datetime' => $this->iso8601($timestamp),
+            'contracts' => $contracts,
+            'contractSize' => null,
+            'side' => $side,
+            'notional' => $notional,
+            'leverage' => $leverage,
+            'unrealizedPnl' => $unrealizedPnl,
+            'realizedPnl' => null,
+            'collateral' => $collateral,
+            'entryPrice' => $entryPrice,
+            'markPrice' => $markPrice,
+            'liquidationPrice' => $liquidationPrice,
+            'marginMode' => $marginMode,
+            'hedged' => null,
+            'maintenanceMargin' => $maintenanceMargin,
+            'maintenanceMarginPercentage' => null,
+            'initialMargin' => $initialMargin,
+            'initialMarginPercentage' => null,
+            'marginRatio' => null,
+            'percentage' => null,
+            'stopLossPrice' => null,
+            'takeProfitPrice' => null,
+            'info' => $position,
+        ));
     }
 
     public function parse_balance(array $response): array {
-    $result = array( "info" => $response );
-    $assets = $this->safe_list($response, "assets", array());
-    for ($i = 0; $i < count($assets); $i++) {
-      $asset = $assets[$i];
-      $code = $this->safe_string($asset, "symbol");
-      $account = $this->account();
-      $account["total"] = $this->parse_e9(
-        $this->safe_string($asset, "quantityE9"),
-      );
-      $account["free"] = $this->parse_e9(
-        $this->safe_string($asset, "effectiveBalanceE9"),
-      );
-      $result[$code] = $account;
-    }
-    return $this->safe_balance($result);
+        $result = array( 'info' => $response );
+        $assets = $this->safe_list($response, 'assets', array());
+        for ($i = 0; $i < count($assets); $i++) {
+            $asset = $assets[$i];
+            $code = $this->safe_string($asset, 'symbol');
+            $account = $this->account();
+            $account['total'] = $this->parse_e9($this->safe_string($asset, 'quantityE9'));
+            $account['free'] = $this->parse_e9($this->safe_string($asset, 'effectiveBalanceE9'));
+            $result[$code] = $account;
+        }
+        return $this->safe_balance($result);
     }
 
     public function parse_ohlcv(mixed $ohlcv, ?array $market = null): array {
-    // Bluefin returns candlesticks of strings:
-    //   [startTime, open, high, low, close, volume,
-    //    endTime, quoteVolume, tradeCount]
-    return array(
-      $this->safe_integer($ohlcv, 0),
-      $this->safe_number($ohlcv, 1),
-      $this->safe_number($ohlcv, 2),
-      $this->safe_number($ohlcv, 3),
-      $this->safe_number($ohlcv, 4),
-      $this->safe_number($ohlcv, 5),
-    );
+        // Bluefin returns candlesticks of strings:
+        //   [startTime, open, high, low, close, volume,
+        //    endTime, quoteVolume, tradeCount]
+        return array(
+            $this->safe_integer($ohlcv, 0),
+            $this->safe_number($ohlcv, 1),
+            $this->safe_number($ohlcv, 2),
+            $this->safe_number($ohlcv, 3),
+            $this->safe_number($ohlcv, 4),
+            $this->safe_number($ohlcv, 5),
+        );
     }
 
     public function parse_funding_rate_history(array $entry, ?array $market = null): FundingRateHistory {
-    $bluefinSym = $this->safe_string($entry, "symbol");
-    $symbol = ($bluefinSym !== null)
-      ? $this->ccxt_symbol($bluefinSym)
-      : null;
-    $fundingRate = $this->parse_e9(
-      $this->safe_string($entry, "fundingRateE9"),
-    );
-    $timestamp = $this->safe_integer(
-      $entry,
-      "fundingTimeAtMillis",
-    );
-    return array(
-      "info" => $entry,
-      "symbol" => $symbol,
-      "fundingRate" => $this->parse_number($fundingRate),
-      "timestamp" => $timestamp,
-      "datetime" => $this->iso8601($timestamp),
-    );
+        $bluefinSym = $this->safe_string($entry, 'symbol');
+        $symbol = ($bluefinSym !== null) ? $this->ccxt_symbol($bluefinSym) : null;
+        $fundingRate = $this->parse_e9($this->safe_string($entry, 'fundingRateE9'));
+        $timestamp = $this->safe_integer($entry, 'fundingTimeAtMillis');
+        return array(
+            'info' => $entry,
+            'symbol' => $symbol,
+            'fundingRate' => $this->parse_number($fundingRate),
+            'timestamp' => $timestamp,
+            'datetime' => $this->iso8601($timestamp),
+        );
     }
 
     public function parse_order_status(?string $status): string {
-    // Bluefin $status → CCXT $status
-    $statuses = array(
-      "PENDING" => "open",
-      "STANDBY" => "open",
-      "OPEN" => "open",
-      "PARTIAL_FILLED" => "open",
-      "PARTIALLY_FILLED_OPEN" => "open",
-      "FILLED" => "closed",
-      "CANCELLED" => "canceled",
-      "CANCELLING" => "canceled",
-      "PARTIALLY_FILLED_CANCELED" => "canceled",
-      "EXPIRED" => "canceled",
-      "PARTIALLY_FILLED_EXPIRED" => "canceled",
-      "REJECTED" => "rejected",
-    );
-    return $this->safe_string($statuses, $status, $status);
+        $statuses = array(
+            'PENDING' => 'open',
+            'STANDBY' => 'open',
+            'OPEN' => 'open',
+            'PARTIAL_FILLED' => 'open',
+            'PARTIALLY_FILLED_OPEN' => 'open',
+            'FILLED' => 'closed',
+            'CANCELLED' => 'canceled',
+            'CANCELLING' => 'canceled',
+            'PARTIALLY_FILLED_CANCELED' => 'canceled',
+            'EXPIRED' => 'canceled',
+            'PARTIALLY_FILLED_EXPIRED' => 'canceled',
+            'REJECTED' => 'rejected',
+        );
+        return $this->safe_string($statuses, $status, $status);
     }
 
     public function parse_order_side(?string $side): string {
-    // Bluefin uses LONG/SHORT; CCXT uses buy/sell
-    $sides = array(
-      "LONG" => "buy",
-      "SHORT" => "sell",
-      "BUY" => "buy",
-      "SELL" => "sell",
-    );
-    return $this->safe_string($sides, $side, $side);
+        $sides = array(
+            'LONG' => 'buy',
+            'SHORT' => 'sell',
+            'BUY' => 'buy',
+            'SELL' => 'sell',
+        );
+        return $this->safe_string($sides, $side, $side);
     }
 
-    public function sign(string $path, $api = "public", $method = "GET", array $params = array (), mixed $headers = null, mixed $body = null): array {
-    //
-    // CCXT calls this for every HTTP request.  We attach auth $headers
-    // only for private API groups (account, trade).
-    //
-    $url = $this->urls["api"][$api] . "/" . $path;
-    if ($api === "exchange" || $api === "auth") {
-      // Public endpoints — no auth header
-      if ($method === "GET") {
-        if ($params) {
-          $url .= "?" . $this->urlencode($params);
+    public function sign(string $path, $api = 'public', $method = 'GET', array $params = array (), mixed $headers = null, mixed $body = null): array {
+        //
+        // CCXT calls this for every HTTP request.  We attach auth $headers
+        // only for private API groups (account, trade).
+        //
+        $url = $this->urls['api'][$api] . '/' . $path;
+        if ($api === 'exchange' || $api === 'auth') {
+            // Public endpoints — no auth header
+            if ($method === 'GET') {
+                if ($params) {
+                    $url .= '?' . $this->urlencode($params);
+                }
+            } else {
+                $headers = array( 'Content-Type' => 'application/json' );
+                $body = $this->json($params);
+            }
+        } else {
+            // Private endpoints — attach JWT bearer $token
+            // TODO => call getAccessToken() (which may trigger
+            //       authenticate() or refreshAccessToken())
+            //
+            // $token = $this->get_access_token();
+            $headers = array(
+                'Content-Type' => 'application/json',
+                // 'Authorization' => 'Bearer ' . $token,
+            );
+            if ($method === 'GET') {
+                if ($params) {
+                    $url .= '?' . $this->urlencode($params);
+                }
+            } else {
+                $body = $this->json($params);
+            }
         }
-      } else {
-        $headers = array( "Content-Type" => "application/json" );
-        $body = $this->json($params);
-      }
-    } else {
-      // Private endpoints — attach JWT bearer $token
-      // TODO => call getAccessToken() (which may trigger
-      //       authenticate() or refreshAccessToken())
-      //
-      // $token = $this->get_access_token();
-      $headers = array(
-        "Content-Type" => "application/json",
-        // 'Authorization' => 'Bearer ' . $token,
-      );
-      if ($method === "GET") {
-        if ($params) {
-          $url .= "?" . $this->urlencode($params);
-        }
-      } else {
-        $body = $this->json($params);
-      }
-    }
-    return array( "url" => $url, "method" => $method, "body" => $body, "headers" => $headers );
+        return array( 'url' => $url, 'method' => $method, 'body' => $body, 'headers' => $headers );
     }
 
     public function authenticate($params = array ()): array {
-    // TODO => Ed25519 login flow
-    //
-    //  1. Build LoginRequest:
-    //     array( userAddress, audience => "bluefin", timestamp )
-    //  2. Serialise and sign with Ed25519 ($this->privateKey)
-    //     to produce a Sui personalMessage signature
-    //  3. POST to authPostAuthV2Token with:
-    //     array( token => base64Signature, userAddress, audience, timestamp )
-    //  4. Store response => $this->accessToken, $this->refreshToken,
-    //     $this->accessTokenExpiry, $this->refreshTokenExpiry
-    //  5. Return array( accessToken, refreshToken )
-    //
-    throw new Error("authenticate not implemented");
+        // TODO => Ed25519 login flow
+        //
+        //  1. Build LoginRequest:
+        //     array( userAddress, audience => 'bluefin', timestamp )
+        //  2. Serialise and sign with Ed25519 ($this->privateKey)
+        //     to produce a Sui personalMessage signature
+        //  3. POST to authPostAuthV2Token with:
+        //     array( token => base64Signature, userAddress, audience, timestamp )
+        //  4. Store response => $this->accessToken, $this->refreshToken,
+        //     $this->accessTokenExpiry, $this->refreshTokenExpiry
+        //  5. Return array( accessToken, refreshToken )
+        //
+        throw new \Exception('authenticate not implemented');
     }
 
     public function refresh_access_token($params = array ()): array {
-    // TODO => call authPutAuthTokenRefresh with
-    //       array( refreshToken => $this->refreshToken )
-    //       Update stored tokens . expiry times
-    throw new Error("refreshAccessToken not implemented");
+        // TODO => call authPutAuthTokenRefresh with
+        //       array( refreshToken => $this->refreshToken )
+        //       Update stored tokens . expiry times
+        throw new \Exception('refreshAccessToken not implemented');
     }
 
     public function get_access_token(): string {
-    // TODO:
-    //  - If no access token → call authenticate()
-    //  - If access token near expiry (< 60s) → call refreshAccessToken()
-    //  - Return $this->accessToken
-    throw new Error("getAccessToken not implemented");
+        // TODO:
+        //  - If no access token → call authenticate()
+        //  - If access token near expiry (< 60s) → call refreshAccessToken()
+        //  - Return $this->accessToken
+        throw new \Exception('getAccessToken not implemented');
     }
 
     public function sign_request(array $fields): array {
-    // TODO => Ed25519 personal message signing for trade operations.
-    //
-    //  Used by createOrder, cancelOrder, setLeverage, withdraw, etc.
-    //
-    //  1. Deterministically serialise `$fields` (sorted keys, specific
-    //     Bluefin encoding — see SDK source)
-    //  2. Sign with Ed25519 $this->privateKey
-    //  3. Return array( ...fields, signature => base64Signature, signer => walletAddress )
-    //
-    throw new Error("signRequest not implemented");
+        // TODO => Ed25519 personal message signing for trade operations.
+        //
+        //  Used by createOrder, cancelOrder, setLeverage, withdraw, etc.
+        //
+        //  1. Deterministically serialise `$fields` (sorted keys, specific
+        //     Bluefin encoding — see SDK source)
+        //  2. Sign with Ed25519 $this->privateKey
+        //  3. Return array( ...fields, signature => base64Signature, signer => walletAddress )
+        //
+        throw new \Exception('signRequest not implemented');
     }
 
     public function parse_e9(?string $value): ?string {
-    // Bluefin stores prices/quantities strings
-    // scaled by 1e9. Shift the decimal point 9 places right
-    // via Precise — no floating-point arithmetic involved.
-    if ($value === null) {
-      return null;
-    }
-    $precise = new Precise($value);
-    $precise->decimals = $precise->decimals + 9;
-    $precise->reduce();
-    return $precise->toString();
+        // Bluefin stores prices/quantities strings
+        // scaled by 1e9. Shift the decimal point 9 places right
+        // via Precise — no floating-point arithmetic involved.
+        if ($value === null) {
+            return null;
+        }
+        $precise = new Precise ($value);
+        $precise->decimals = $precise->decimals + 9;
+        $precise->reduce ();
+        return (string) $precise;
     }
 
     public function to_e9(?string $value): ?string {
-    // Reverse of parseE9 => shift decimal 9 places left to
-    // produce Bluefin's scaled-integer string.
-    if ($value === null) {
-      return null;
-    }
-    $precise = new Precise($value);
-    $precise->decimals = $precise->decimals - 9;
-    $precise->reduce();
-    return $precise->toString();
+        // Reverse of parseE9 => shift decimal 9 places left to
+        // produce Bluefin's scaled-integer string.
+        if ($value === null) {
+            return null;
+        }
+        $precise = new Precise ($value);
+        $precise->decimals = $precise->decimals - 9;
+        $precise->reduce ();
+        return (string) $precise;
     }
 
     public function convert_e9_levels(array $levels): array {
-    // Convert [[priceE9, qtyE9], ...] to [[price, qty], ...]
-    // pairs for lossless order book construction.
-    $result => anyarray()[] = array();
-    for ($i = 0; $i < count($levels); $i++) {
-      $level = $levels[$i];
-      $result[] = array(
-        $this->parse_e9($this->safe_string($level, 0)),
-        $this->parse_e9($this->safe_string($level, 1)),
-      );
-    }
-    return $result;
+        // Convert [[priceE9, qtyE9], ...] to [[price, qty], ...]
+        // pairs for lossless order book construction.
+        $result => anyarray()[] = array();
+        for ($i = 0; $i < count($levels); $i++) {
+            $level = $levels[$i];
+            $result[] = array(
+                $this->parse_e9($this->safe_string($level, 0)),
+                $this->parse_e9($this->safe_string($level, 1)),
+            );
+        }
+        return $result;
     }
 
     public function bluefin_symbol(string $ccxtSymbol): string {
-    // "ETH/USDC:USDC" → "ETH-PERP"
-    $market = $this->market($ccxtSymbol);
-    return $market["base"] . "-PERP";
+        // "ETH/USDC:USDC" → "ETH-PERP"
+        $market = $this->market($ccxtSymbol);
+        return $market['base'] . '-PERP';
     }
 
     public function ccxt_symbol(string $bluefinSymbol): string {
-    // "ETH-PERP" → "ETH/USDC:USDC"
-    $base = str_replace("-PERP", "", $bluefinSymbol);
-    return $base . "/USDC:USDC";
+        // "ETH-PERP" → "ETH/USDC:USDC"
+        $base = str_replace('-PERP', '', $bluefinSymbol);
+        return $base . '/USDC:USDC';
     }
 }

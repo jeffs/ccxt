@@ -1,47 +1,22 @@
-// ---------------------------------------------------------------------------
-//  Bluefin — CCXT WebSocket exchange scaffold
-//
-//  Extends the REST class with streaming market-data and private-account
-//  subscriptions.  Bluefin uses two separate WebSocket endpoints:
-//    - market WS (public):  order books, tickers, trades, candles
-//    - account WS (private): orders, fills, balances, positions (needs JWT)
-//
-//  This file is a SCAFFOLD — method bodies are stubs with TODO comments.
-// ---------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
 
 import bluefinRest from '../bluefin.js';
 import type Client from '../base/ws/Client.js';
-import type {
-    Dict,
-    Int,
-    Market,
-    Num,
-    OHLCV,
-    Order,
-    OrderBook,
-    Position,
-    Str,
-    Strings,
-    Ticker,
-    Tickers,
-    Trade,
-    Balances,
-} from '../base/types.js';
+import type { Dict, Int, Market, Num, OHLCV, Order, OrderBook, Position, Str, Strings, Ticker, Tickers, Trade, Balances } from '../base/types.js';
 
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 
 export default class bluefin extends bluefinRest {
     describe () {
         return this.deepExtend (super.describe (), {
             'has': {
                 'ws': true,
-                // public
                 'watchOrderBook': true,
                 'watchTicker': true,
                 'watchTickers': true,
                 'watchTrades': true,
                 'watchOHLCV': true,
-                // private
                 'watchOrders': true,
                 'watchMyTrades': true,
                 'watchBalance': true,
@@ -50,13 +25,13 @@ export default class bluefin extends bluefinRest {
             'urls': {
                 'api': {
                     'ws': {
-                        'public':  'wss://stream.api.sui-prod.bluefin.io/ws/market',
+                        'public': 'wss://stream.api.sui-prod.bluefin.io/ws/market',
                         'private': 'wss://stream.api.sui-prod.bluefin.io/ws/account',
                     },
                 },
                 'test': {
                     'ws': {
-                        'public':  'wss://stream.api.sui-staging.bluefin.io/ws/market',
+                        'public': 'wss://stream.api.sui-staging.bluefin.io/ws/market',
                         'private': 'wss://stream.api.sui-staging.bluefin.io/ws/account',
                     },
                 },
@@ -67,10 +42,6 @@ export default class bluefin extends bluefinRest {
             },
         });
     }
-
-    // ========================================================================
-    //  Public watch methods (market WS)
-    // ========================================================================
 
     async watchOrderBook (symbol: string, limit: Int = undefined, params = {}): Promise<OrderBook> {
         // TODO:
@@ -110,10 +81,6 @@ export default class bluefin extends bluefinRest {
         throw new Error ('watchOHLCV not implemented');
     }
 
-    // ========================================================================
-    //  Private watch methods (account WS, needs JWT auth)
-    // ========================================================================
-
     async watchOrders (symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Order[]> {
         // TODO:
         //  1. Authenticate if needed (getAccessToken)
@@ -142,10 +109,6 @@ export default class bluefin extends bluefinRest {
         //       with authToken, messageHash = 'positions'
         throw new Error ('watchPositions not implemented');
     }
-
-    // ========================================================================
-    //  Message router
-    // ========================================================================
 
     handleMessage (client: Client, message: any): void {
         // TODO: route by channel/event type in the incoming message.
@@ -180,10 +143,6 @@ export default class bluefin extends bluefinRest {
         //     handler.call (this, client, message);
         // }
     }
-
-    // ========================================================================
-    //  Message handlers (stubs)
-    // ========================================================================
 
     handleOrderBook (client: Client, message: Dict): void {
         // TODO: parse OrderbookPartialDepthUpdate / OrderbookDiffDepthUpdate
@@ -241,10 +200,6 @@ export default class bluefin extends bluefinRest {
         //  - Parse via this.parsePosition()
         //  - Resolve messageHash = 'positions'
     }
-
-    // ========================================================================
-    //  Ping / pong
-    // ========================================================================
 
     ping (client: Client): Dict {
         return { 'op': 'PING' };
