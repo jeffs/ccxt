@@ -274,51 +274,38 @@ These C# base classes and files are not transpiled:
 
 ### Derived Exchange Classes
 
-Transpiler is regex-based and heavily relies on specific formatting rules. If you break them then the transpiler will either
-fail to generate Python/PHP classes at all or will generate malformed Python/PHP syntax.
+The transpiler (`build/transpile.ts`, `build/transpileWS.ts`) converts TypeScript exchange files into JavaScript, Python, PHP, C#, and Go. It is **not** an AST-based tool — it uses regex-based parsing with strict formatting assumptions. Exchange `.ts` files that don't follow these rules will crash the transpiler.
 
-Below are key notes on how to keep the JS code transpileable.
+**See [Transpiler Formatting](https://github.com/ccxt/ccxt/wiki/Transpiler-Formatting) for the full specification** — the parsing mechanism, the exact regexes, and good/bad examples for each rule. The short version:
 
-Use the linter `npm run lint js/your-exchange-implementation.js` before you build. It will cover many (but not all) the issues,
-so manual checking will still be required if transpilation fails.
+- no blank lines inside method bodies (the transpiler splits methods on `\n\s*\n`)
+- method signatures must be on a single line (only `lines[0]` is parsed)
+- space before `(` in method signatures (`describe ()` not `describe()`)
+- no standalone comment blocks between methods
+- 4-space indentation, no tabs
 
-If you see a `[TypeError] Cannot read property '1' of null` exception or any other transpilation error when you `npm run build`, check if your code satisfies the following rules:
+Code style rules (won't crash the transpiler, but produce malformed output):
 
-- don't put empty lines inside your methods
-- always use Python-style indentation, it is preserved as is for all languages
-- indent with 4 spaces **exactly**, avoid tabs
-- put an empty line between each of your methods
-- avoid mixed comment styles, use double-slash `//` in JS for line comments
-- avoid multi-line comments
-
-If the transpiling process finishes successfully, but generates incorrect Python/PHP syntax, check for the following:
-
-- every opening bracket like `(` or `{` should have a space before it!
-- do not use language-specific code syntax sugar, even if you really want to
-- unfold all maps and comprehensions to basic for-loops
-- don't change the arguments of overridden inherited methods, keep them uniform across all exchanges
-- everything should be done using base class methods only (for example, use `this.json ()` for converting objects to json)
-- always put a semicolon `;` at the end of each statement, as in PHP/C-style
-- all associative keys must be single-quoted strings everywhere (`array['good']`), do not use the dot notation (`array.bad`)
-- never use the `var` keyword, instead use `const` for constants or `let` for variables
+- space before every opening bracket: `this.safeString (obj, 'key')` not `this.safeString(obj, 'key')`
+- single-quoted associative keys everywhere (`array['good']`), no dot notation (`array.bad`)
+- semicolons at statement ends, double-slash `//` comments only
+- `const`/`let` only, no `var`
+- no syntax sugar: no `.includes()`, no closures/map/filter, no `in` on arrays
+- never `.toString()` on floats: `Number (0.00000001).toString () === '1e-8'`
+- **don't access non-existent keys — `array['key'] || {}` won't work in other languages!**
+- use base class methods only (e.g. `this.json ()` for JSON)
+- don't change arguments of overridden inherited methods
 
 And structurally:
 
-- if you need another base method you will have to implement it in all three languages
+- if you need another base method you will have to implement it in all target languages
 - try not to issue more than one HTTP request from a unified method
 - avoid changing the contents of the arguments and params passed by reference into function calls
 - keep it simple, don't do more than one statement in one line
-- try to reduce syntax & logic (if possible) to basic one-liner expressions
-- multiple lines are ok, but you should avoid deep nesting with lots of brackets
-- do not use conditional statements that are too complex (heavy if-bracketing)
-- do not use heavy ternary conditionals
+- avoid deep nesting with lots of brackets
+- do not use heavy conditionals or ternary operators
 - avoid operators clutter (**don't do this**: `a && b || c ? d + 80 : e ** f`)
-- do not use `.includes()`, use `.indexOf()` instead!
-- never use `.toString()` on floats: `Number (0.00000001).toString () === '1e-8'`
-- do not use closures, `a.map` or `a.filter (x => (x === 'foobar'))` is not acceptable in derived classes
-- do not use the `in` operator to check if a value is in a non-associative array (list)
 - don't add custom currency or symbol/pair conversions and formatting, copy from existing code instead
-- **don't access non-existent keys, `array['key'] || {}` won't work in other languages!**
 
 #### Sending Market Ids
 
