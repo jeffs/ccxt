@@ -116,6 +116,7 @@ from ccxt.bittrade import bittrade                                    # noqa: F4
 from ccxt.bitvavo import bitvavo                                      # noqa: F401
 from ccxt.blockchaincom import blockchaincom                          # noqa: F401
 from ccxt.blofin import blofin                                        # noqa: F401
+from ccxt.bluefin import bluefin                                      # noqa: F401
 from ccxt.btcbox import btcbox                                        # noqa: F401
 from ccxt.btcmarkets import btcmarkets                                # noqa: F401
 from ccxt.btcturk import btcturk                                      # noqa: F401
@@ -228,6 +229,7 @@ exchanges = [
     'bitvavo',
     'blockchaincom',
     'blofin',
+    'bluefin',
     'btcbox',
     'btcmarkets',
     'btcturk',

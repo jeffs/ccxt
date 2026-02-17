@@ -373,6 +373,7 @@ class Exchange {
         'bitvavo',
         'blockchaincom',
         'blofin',
+        'bluefin',
         'btcbox',
         'btcmarkets',
         'btcturk',

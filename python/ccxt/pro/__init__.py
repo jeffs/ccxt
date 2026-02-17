@@ -81,6 +81,7 @@ from ccxt.pro.bittrade import bittrade                                    # noqa
 from ccxt.pro.bitvavo import bitvavo                                      # noqa: F401
 from ccxt.pro.blockchaincom import blockchaincom                          # noqa: F401
 from ccxt.pro.blofin import blofin                                        # noqa: F401
+from ccxt.pro.bluefin import bluefin                                      # noqa: F401
 from ccxt.pro.bullish import bullish                                      # noqa: F401
 from ccxt.pro.bybit import bybit                                          # noqa: F401
 from ccxt.pro.bydfi import bydfi                                          # noqa: F401
@@ -160,6 +161,7 @@ exchanges = [
     'bitvavo',
     'blockchaincom',
     'blofin',
+    'bluefin',
     'bullish',
     'bybit',
     'bydfi',

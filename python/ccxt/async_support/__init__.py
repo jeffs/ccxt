@@ -96,6 +96,7 @@ from ccxt.async_support.bittrade import bittrade                                
 from ccxt.async_support.bitvavo import bitvavo                                  # noqa: F401
 from ccxt.async_support.blockchaincom import blockchaincom                      # noqa: F401
 from ccxt.async_support.blofin import blofin                                    # noqa: F401
+from ccxt.async_support.bluefin import bluefin                                  # noqa: F401
 from ccxt.async_support.btcbox import btcbox                                    # noqa: F401
 from ccxt.async_support.btcmarkets import btcmarkets                            # noqa: F401
 from ccxt.async_support.btcturk import btcturk                                  # noqa: F401
@@ -208,6 +209,7 @@ exchanges = [
     'bitvavo',
     'blockchaincom',
     'blofin',
+    'bluefin',
     'btcbox',
     'btcmarkets',
     'btcturk',

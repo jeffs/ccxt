@@ -1,0 +1,211 @@
+// ---------------------------------------------------------------------------
+//  Bluefin — CCXT WebSocket exchange scaffold
+//
+//  Extends the REST class with streaming market-data and private-account
+//  subscriptions.  Bluefin uses two separate WebSocket endpoints:
+//    - market WS (public):  order books, tickers, trades, candles
+//    - account WS (private): orders, fills, balances, positions (needs JWT)
+//
+//  This file is a SCAFFOLD — method bodies are stubs with TODO comments.
+// ---------------------------------------------------------------------------
+import bluefinRest from '../bluefin.js';
+// ---------------------------------------------------------------------------
+export default class bluefin extends bluefinRest {
+    describe() {
+        return this.deepExtend(super.describe(), {
+            'has': {
+                'ws': true,
+                // public
+                'watchOrderBook': true,
+                'watchTicker': true,
+                'watchTickers': true,
+                'watchTrades': true,
+                'watchOHLCV': true,
+                // private
+                'watchOrders': true,
+                'watchMyTrades': true,
+                'watchBalance': true,
+                'watchPositions': true,
+            },
+            'urls': {
+                'api': {
+                    'ws': {
+                        'public': 'wss://stream.api.sui-prod.bluefin.io/ws/market',
+                        'private': 'wss://stream.api.sui-prod.bluefin.io/ws/account',
+                    },
+                },
+                'test': {
+                    'ws': {
+                        'public': 'wss://stream.api.sui-staging.bluefin.io/ws/market',
+                        'private': 'wss://stream.api.sui-staging.bluefin.io/ws/account',
+                    },
+                },
+            },
+            'streaming': {
+                'ping': this.ping,
+                'keepAlive': 20000,
+            },
+        });
+    }
+    // ========================================================================
+    //  Public watch methods (market WS)
+    // ========================================================================
+    async watchOrderBook(symbol, limit = undefined, params = {}) {
+        // TODO:
+        //  1. loadMarkets, resolve market
+        //  2. Subscribe to channel: "Partial_Depth_20" or "Diff_Depth_500_ms"
+        //     on the public (market) WS
+        //  3. Subscription message:
+        //     { op: "SUBSCRIBE", channel: "Partial_Depth_20",
+        //       symbols: [ bluefinSymbol ] }
+        //  4. messageHash = 'orderbook:' + symbol
+        //  5. return await this.watch (url, messageHash, message, messageHash)
+        throw new Error('watchOrderBook not implemented');
+    }
+    async watchTicker(symbol, params = {}) {
+        // TODO: subscribe to "Ticker" channel on market WS
+        //       messageHash = 'ticker:' + symbol
+        throw new Error('watchTicker not implemented');
+    }
+    async watchTickers(symbols = undefined, params = {}) {
+        // TODO: subscribe to "Ticker_All" channel on market WS
+        //       messageHash = 'tickers'
+        throw new Error('watchTickers not implemented');
+    }
+    async watchTrades(symbol, since = undefined, limit = undefined, params = {}) {
+        // TODO: subscribe to "Recent_Trade" channel on market WS
+        //       messageHash = 'trades:' + symbol
+        throw new Error('watchTrades not implemented');
+    }
+    async watchOHLCV(symbol, timeframe = '1m', since = undefined, limit = undefined, params = {}) {
+        // TODO: subscribe to "Candlestick_{interval}_Last" channel
+        //       where interval = this.timeframes[timeframe]
+        //       messageHash = 'ohlcv:' + timeframe + ':' + symbol
+        throw new Error('watchOHLCV not implemented');
+    }
+    // ========================================================================
+    //  Private watch methods (account WS, needs JWT auth)
+    // ========================================================================
+    async watchOrders(symbol = undefined, since = undefined, limit = undefined, params = {}) {
+        // TODO:
+        //  1. Authenticate if needed (getAccessToken)
+        //  2. Subscribe to "AccountOrderUpdate" on account WS
+        //  3. Subscription message includes authToken field:
+        //     { op: "SUBSCRIBE", channel: "AccountOrderUpdate",
+        //       authToken: jwt }
+        //  4. messageHash = 'orders'
+        throw new Error('watchOrders not implemented');
+    }
+    async watchMyTrades(symbol = undefined, since = undefined, limit = undefined, params = {}) {
+        // TODO: subscribe to "AccountTradeUpdate" on account WS
+        //       with authToken, messageHash = 'myTrades'
+        throw new Error('watchMyTrades not implemented');
+    }
+    async watchBalance(params = {}) {
+        // TODO: subscribe to "AccountUpdate" on account WS
+        //       with authToken, messageHash = 'balance'
+        throw new Error('watchBalance not implemented');
+    }
+    async watchPositions(symbols = undefined, since = undefined, limit = undefined, params = {}) {
+        // TODO: subscribe to "AccountPositionUpdate" on account WS
+        //       with authToken, messageHash = 'positions'
+        throw new Error('watchPositions not implemented');
+    }
+    // ========================================================================
+    //  Message router
+    // ========================================================================
+    handleMessage(client, message) {
+        // TODO: route by channel/event type in the incoming message.
+        //
+        // Expected dispatch table (message.channel → handler):
+        //   "OrderbookPartialDepthUpdate"  → handleOrderBook
+        //   "OrderbookDiffDepthUpdate"     → handleOrderBook
+        //   "TickerUpdate"                 → handleTicker
+        //   "RecentTradesUpdates"          → handleTrades
+        //   "CandlestickUpdate"            → handleOHLCV
+        //   "AccountOrderUpdate"           → handleOrder
+        //   "AccountTradeUpdate"           → handleMyTrades
+        //   "AccountUpdate"                → handleBalance
+        //   "AccountPositionUpdate"        → handlePosition
+        //   "pong"                         → handlePong
+        //
+        // const methods: Dict = {
+        //     'OrderbookPartialDepthUpdate': this.handleOrderBook,
+        //     'OrderbookDiffDepthUpdate': this.handleOrderBook,
+        //     'TickerUpdate': this.handleTicker,
+        //     'RecentTradesUpdates': this.handleTrades,
+        //     'CandlestickUpdate': this.handleOHLCV,
+        //     'AccountOrderUpdate': this.handleOrder,
+        //     'AccountTradeUpdate': this.handleMyTrades,
+        //     'AccountUpdate': this.handleBalance,
+        //     'AccountPositionUpdate': this.handlePosition,
+        //     'pong': this.handlePong,
+        // };
+        // const channel = this.safeString (message, 'channel');
+        // const handler = this.safeValue (methods, channel);
+        // if (handler !== undefined) {
+        //     handler.call (this, client, message);
+        // }
+    }
+    // ========================================================================
+    //  Message handlers (stubs)
+    // ========================================================================
+    handleOrderBook(client, message) {
+        // TODO: parse OrderbookPartialDepthUpdate / OrderbookDiffDepthUpdate
+        //  - Extract symbol, bids, asks from message.data
+        //  - For partial: snapshot the order book
+        //  - For diff: apply incremental updates
+        //  - Resolve messageHash = 'orderbook:' + symbol
+    }
+    handleTicker(client, message) {
+        // TODO: parse TickerUpdate
+        //  - Extract ticker data from message.data
+        //  - Parse via this.parseTicker()
+        //  - Resolve messageHash = 'ticker:' + symbol
+    }
+    handleTrades(client, message) {
+        // TODO: parse RecentTradesUpdates
+        //  - Extract trades array from message.data
+        //  - Parse each via this.parseTrade()
+        //  - Append to ArrayCache
+        //  - Resolve messageHash = 'trades:' + symbol
+    }
+    handleOHLCV(client, message) {
+        // TODO: parse CandlestickUpdate
+        //  - Extract candle from message.data
+        //  - Parse via this.parseOHLCV()
+        //  - Append to ArrayCacheByTimestamp
+        //  - Resolve messageHash = 'ohlcv:' + timeframe + ':' + symbol
+    }
+    handleOrder(client, message) {
+        // TODO: parse AccountOrderUpdate
+        //  - Parse via this.parseOrder()
+        //  - Update ArrayCacheBySymbolById
+        //  - Resolve messageHash = 'orders'
+    }
+    handleMyTrades(client, message) {
+        // TODO: parse AccountTradeUpdate
+        //  - Parse via this.parseTrade()
+        //  - Append to ArrayCache
+        //  - Resolve messageHash = 'myTrades'
+    }
+    handleBalance(client, message) {
+        // TODO: parse AccountUpdate
+        //  - Parse via this.parseBalance()
+        //  - Resolve messageHash = 'balance'
+    }
+    handlePosition(client, message) {
+        // TODO: parse AccountPositionUpdate
+        //  - Parse via this.parsePosition()
+        //  - Resolve messageHash = 'positions'
+    }
+    // ========================================================================
+    //  Ping / pong
+    // ========================================================================
+    ping(client) {
+        return { 'op': 'PING' };
+    }
+    handlePong(client, message) {
+        client.lastPong = this.milliseconds();
+    }
+}
