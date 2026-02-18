@@ -104,53 +104,23 @@ class bluefin(ccxt.async_support.bluefin):
         #       with authToken, messageHash = 'positions'
         raise Error('watchPositions not implemented')
 
-    def handle_message(self, client: Client, message: Any) -> void:
-        # TODO: route by channel/event type in the incoming message.
-        #
-        # Expected dispatch table(message.channel → handler):
-        #   "OrderbookPartialDepthUpdate"  → handleOrderBook
-        #   "OrderbookDiffDepthUpdate"     → handleOrderBook
-        #   "TickerUpdate"                 → handleTicker
-        #   "RecentTradesUpdates"          → handleTrades
-        #   "CandlestickUpdate"            → handleOHLCV
-        #   "AccountOrderUpdate"           → handleOrder
-        #   "AccountTradeUpdate"           → handleMyTrades
-        #   "AccountUpdate"                → handleBalance
-        #   "AccountPositionUpdate"        → handlePosition
-        #   "pong"                         → handlePong
-        #
-        # methods: Dict = {
-        #     'OrderbookPartialDepthUpdate': self.handle_order_book,
-        #     'OrderbookDiffDepthUpdate': self.handle_order_book,
-        #     'TickerUpdate': self.handle_ticker,
-        #     'RecentTradesUpdates': self.handle_trades,
-        #     'CandlestickUpdate': self.handle_ohlcv,
-        #     'AccountOrderUpdate': self.handle_order,
-        #     'AccountTradeUpdate': self.handle_my_trades,
-        #     'AccountUpdate': self.handle_balance,
-        #     'AccountPositionUpdate': self.handle_position,
-        #     'pong': self.handle_pong,
-        # }
-        # channel = self.safe_string(message, 'channel')
-        # handler = self.safe_value(methods, channel)
-        # if handler is not None:
-        #     handler(client, message)
-        # }
+    def handle_message(self, client: Client, message: Any):
+        return None
 
-    def handle_order_book(self, client: Client, message: dict) -> void:
+    def handle_order_book(self, client: Client, message: dict):
         # TODO: parse OrderbookPartialDepthUpdate / OrderbookDiffDepthUpdate
         #  - Extract symbol, bids, asks from message.data
         #  - For partial = 'orderbook:' + symbol
         pass
 
-    def handle_ticker(self, client: Client, message: dict) -> void:
+    def handle_ticker(self, client: Client, message: dict):
         # TODO: parse TickerUpdate
         #  - Extract ticker data from message.data
         #  - Parse via self.parse_ticker()
         #  - Resolve messageHash = 'ticker:' + symbol
         pass
 
-    def handle_trades(self, client: Client, message: dict) -> void:
+    def handle_trades(self, client: Client, message: dict):
         # TODO: parse RecentTradesUpdates
         #  - Extract trades array from message.data
         #  - Parse each via self.parse_trade()
@@ -158,7 +128,7 @@ class bluefin(ccxt.async_support.bluefin):
         #  - Resolve messageHash = 'trades:' + symbol
         pass
 
-    def handle_ohlcv(self, client: Client, message: dict) -> void:
+    def handle_ohlcv(self, client: Client, message: dict):
         # TODO: parse CandlestickUpdate
         #  - Extract candle from message.data
         #  - Parse via self.parse_ohlcv()
@@ -166,27 +136,27 @@ class bluefin(ccxt.async_support.bluefin):
         #  - Resolve messageHash = 'ohlcv:' + timeframe + ':' + symbol
         pass
 
-    def handle_order(self, client: Client, message: dict) -> void:
+    def handle_order(self, client: Client, message: dict):
         # TODO: parse AccountOrderUpdate
         #  - Parse via self.parse_order()
         #  - Update ArrayCacheBySymbolById
         #  - Resolve messageHash = 'orders'
         pass
 
-    def handle_my_trades(self, client: Client, message: dict) -> void:
+    def handle_my_trades(self, client: Client, message: dict):
         # TODO: parse AccountTradeUpdate
         #  - Parse via self.parse_trade()
         #  - Append to ArrayCache
         #  - Resolve messageHash = 'myTrades'
         pass
 
-    def handle_balance(self, client: Client, message: dict) -> void:
+    def handle_balance(self, client: Client, message: dict):
         # TODO: parse AccountUpdate
         #  - Parse via self.parse_balance()
         #  - Resolve messageHash = 'balance'
         pass
 
-    def handle_position(self, client: Client, message: dict) -> void:
+    def handle_position(self, client: Client, message: dict):
         # TODO: parse AccountPositionUpdate
         #  - Parse via self.parse_position()
         #  - Resolve messageHash = 'positions'
@@ -195,5 +165,5 @@ class bluefin(ccxt.async_support.bluefin):
     def ping(self, client: Client) -> dict:
         return {'op': 'PING'}
 
-    def handle_pong(self, client: Client, message: Any) -> void:
+    def handle_pong(self, client: Client, message: Any):
         client.lastPong = self.milliseconds()

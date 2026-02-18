@@ -110,41 +110,11 @@ export default class bluefin extends bluefinRest {
         throw new Error ('watchPositions not implemented');
     }
 
-    handleMessage (client: Client, message: any): void {
-        // TODO: route by channel/event type in the incoming message.
-        //
-        // Expected dispatch table (message.channel → handler):
-        //   "OrderbookPartialDepthUpdate"  → handleOrderBook
-        //   "OrderbookDiffDepthUpdate"     → handleOrderBook
-        //   "TickerUpdate"                 → handleTicker
-        //   "RecentTradesUpdates"          → handleTrades
-        //   "CandlestickUpdate"            → handleOHLCV
-        //   "AccountOrderUpdate"           → handleOrder
-        //   "AccountTradeUpdate"           → handleMyTrades
-        //   "AccountUpdate"                → handleBalance
-        //   "AccountPositionUpdate"        → handlePosition
-        //   "pong"                         → handlePong
-        //
-        // const methods: Dict = {
-        //     'OrderbookPartialDepthUpdate': this.handleOrderBook,
-        //     'OrderbookDiffDepthUpdate': this.handleOrderBook,
-        //     'TickerUpdate': this.handleTicker,
-        //     'RecentTradesUpdates': this.handleTrades,
-        //     'CandlestickUpdate': this.handleOHLCV,
-        //     'AccountOrderUpdate': this.handleOrder,
-        //     'AccountTradeUpdate': this.handleMyTrades,
-        //     'AccountUpdate': this.handleBalance,
-        //     'AccountPositionUpdate': this.handlePosition,
-        //     'pong': this.handlePong,
-        // };
-        // const channel = this.safeString (message, 'channel');
-        // const handler = this.safeValue (methods, channel);
-        // if (handler !== undefined) {
-        //     handler.call (this, client, message);
-        // }
+    handleMessage (client: Client, message: any) {
+        return undefined;
     }
 
-    handleOrderBook (client: Client, message: Dict): void {
+    handleOrderBook (client: Client, message: Dict) {
         // TODO: parse OrderbookPartialDepthUpdate / OrderbookDiffDepthUpdate
         //  - Extract symbol, bids, asks from message.data
         //  - For partial: snapshot the order book
@@ -152,14 +122,14 @@ export default class bluefin extends bluefinRest {
         //  - Resolve messageHash = 'orderbook:' + symbol
     }
 
-    handleTicker (client: Client, message: Dict): void {
+    handleTicker (client: Client, message: Dict) {
         // TODO: parse TickerUpdate
         //  - Extract ticker data from message.data
         //  - Parse via this.parseTicker()
         //  - Resolve messageHash = 'ticker:' + symbol
     }
 
-    handleTrades (client: Client, message: Dict): void {
+    handleTrades (client: Client, message: Dict) {
         // TODO: parse RecentTradesUpdates
         //  - Extract trades array from message.data
         //  - Parse each via this.parseTrade()
@@ -167,7 +137,7 @@ export default class bluefin extends bluefinRest {
         //  - Resolve messageHash = 'trades:' + symbol
     }
 
-    handleOHLCV (client: Client, message: Dict): void {
+    handleOHLCV (client: Client, message: Dict) {
         // TODO: parse CandlestickUpdate
         //  - Extract candle from message.data
         //  - Parse via this.parseOHLCV()
@@ -175,27 +145,27 @@ export default class bluefin extends bluefinRest {
         //  - Resolve messageHash = 'ohlcv:' + timeframe + ':' + symbol
     }
 
-    handleOrder (client: Client, message: Dict): void {
+    handleOrder (client: Client, message: Dict) {
         // TODO: parse AccountOrderUpdate
         //  - Parse via this.parseOrder()
         //  - Update ArrayCacheBySymbolById
         //  - Resolve messageHash = 'orders'
     }
 
-    handleMyTrades (client: Client, message: Dict): void {
+    handleMyTrades (client: Client, message: Dict) {
         // TODO: parse AccountTradeUpdate
         //  - Parse via this.parseTrade()
         //  - Append to ArrayCache
         //  - Resolve messageHash = 'myTrades'
     }
 
-    handleBalance (client: Client, message: Dict): void {
+    handleBalance (client: Client, message: Dict) {
         // TODO: parse AccountUpdate
         //  - Parse via this.parseBalance()
         //  - Resolve messageHash = 'balance'
     }
 
-    handlePosition (client: Client, message: Dict): void {
+    handlePosition (client: Client, message: Dict) {
         // TODO: parse AccountPositionUpdate
         //  - Parse via this.parsePosition()
         //  - Resolve messageHash = 'positions'
@@ -205,7 +175,7 @@ export default class bluefin extends bluefinRest {
         return { 'op': 'PING' };
     }
 
-    handlePong (client: Client, message: any): void {
+    handlePong (client: Client, message: any) {
         client.lastPong = this.milliseconds ();
     }
 }

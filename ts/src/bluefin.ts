@@ -6,69 +6,8 @@ import { Precise } from './base/Precise.js';
 import { TICK_SIZE } from './base/functions/number.js';
 import { ed25519 } from './static_dependencies/noble-curves/ed25519.js';
 import { blake2b } from './static_dependencies/noble-hashes/blake2b.js';
-import { concatBytes, utf8ToBytes } from './static_dependencies/noble-hashes/utils.js';
 import { ArgumentsRequired, AuthenticationError, OrderNotFound } from './base/errors.js';
 import type { Balances, Dict, FundingRateHistory, Int, LeverageTier, LeverageTiers, Market, Num, OHLCV, Order, OrderBook, OrderSide, OrderType, Position, Str, Strings, Ticker, Tickers, Trade } from './base/types.js';
-
-// ----------------------------------------------------------------------------
-// Discriminated union types for all signable payloads.
-// Field names and ordering must match the SDK's UI* interfaces exactly
-// so that JSON.stringify produces byte-identical output.
-
-interface BluefinUIOrderRequest {
-    readonly type: 'Bluefin Pro Order';
-    readonly ids: string;
-    readonly account: string;
-    readonly market: string;
-    readonly price: string;
-    readonly quantity: string;
-    readonly leverage: string;
-    readonly side: string;
-    readonly positionType: 'ISOLATED' | 'CROSS';
-    readonly expiration: string;
-    readonly salt: string;
-    readonly signedAt: string;
-}
-
-interface BluefinUILeverageRequest {
-    readonly type: 'Bluefin Pro Leverage Adjustment';
-    readonly ids: string;
-    readonly account: string;
-    readonly market: string;
-    readonly leverage: string;
-    readonly salt: string;
-    readonly signedAt: string;
-}
-
-interface BluefinUIWithdrawRequest {
-    readonly type: 'Bluefin Pro Withdrawal';
-    readonly eds: string;
-    readonly assetSymbol: string;
-    readonly account: string;
-    readonly amount: string;
-    readonly salt: string;
-    readonly signedAt: string;
-}
-
-interface BluefinUIMarginRequest {
-    readonly type: 'Bluefin Pro Margin Adjustment';
-    readonly ids: string;
-    readonly account: string;
-    readonly market: string;
-    readonly add: boolean;
-    readonly amount: string;
-    readonly salt: string;
-    readonly signedAt: string;
-}
-
-type BluefinUISignable = BluefinUIOrderRequest | BluefinUILeverageRequest
-    | BluefinUIWithdrawRequest | BluefinUIMarginRequest;
-
-interface BluefinLoginRequest {
-    readonly accountAddress: string;
-    readonly signedAtMillis: number;
-    readonly audience: 'api';
-}
 
 // ----------------------------------------------------------------------------
 
@@ -101,11 +40,11 @@ export default class bluefin extends Exchange {
                 'cancelOrders': true,
                 'createOrder': true,
                 'fetchBalance': true,
+                'fetchClosedOrders': true,
                 'fetchFundingRateHistory': true,
+                'fetchLeverageTiers': true,
                 'fetchMarkets': true,
                 'fetchMyTrades': true,
-                'fetchClosedOrders': true,
-                'fetchLeverageTiers': true,
                 'fetchOHLCV': true,
                 'fetchOpenOrders': true,
                 'fetchOrder': true,
@@ -215,21 +154,38 @@ export default class bluefin extends Exchange {
         });
     }
 
-    // ---- Sui signing primitives ----
-
-    bcsSerializeBytes (data: Uint8Array): Uint8Array {
+    bcsSerializeBytes (data: any): any {
         // BCS encoding for a byte vector: ULEB128 length prefix followed by raw bytes
-        let len = data.length;
-        const lenBytes: number[] = [];
-        while (len >= 0x80) {
-            lenBytes.push ((len & 0x7f) | 0x80);
-            len >>>= 7;
+        let remaining = data.length;
+        let result = this.base16ToBinary ('');
+        while (remaining >= 0x80) {
+            const byte = (remaining & 0x7f) | 0x80;
+            result = this.binaryConcat (result, this.numberToBE (byte, 1));
+            remaining >>= 7;
         }
-        lenBytes.push (len);
-        return concatBytes (new Uint8Array (lenBytes), data);
+        result = this.binaryConcat (result, this.numberToBE (remaining, 1));
+        return this.binaryConcat (result, data);
     }
 
-    suiSignPersonalMessage (message: Uint8Array, privateKeyHex: string): string {
+    suiBlake2b256 (data: any): any {
+        // Blake2b-256 hash (32-byte digest)
+        // TS: uses noble-hashes blake2b, Python: uses hashlib.blake2b
+        return blake2b (data, { dkLen: 32 });
+    }
+
+    suiEd25519Sign (digest: any, keyBytes: any): any {
+        // Ed25519 raw signature (64 bytes)
+        // TS: uses noble-curves ed25519, Python: uses cryptography library
+        return ed25519.sign (digest, keyBytes);
+    }
+
+    suiEd25519PublicKey (keyBytes: any): any {
+        // Derive Ed25519 public key (32 bytes) from private key
+        // TS: uses noble-curves ed25519, Python: uses cryptography library
+        return ed25519.getPublicKey (keyBytes);
+    }
+
+    suiSignPersonalMessage (message: any, privateKeyHex: string): string {
         // Sui personal-message signing:
         // 1. BCS-serialize the message (ULEB128 length + bytes)
         // 2. Prepend intent bytes [3, 0, 0] (PersonalMessage)
@@ -238,34 +194,54 @@ export default class bluefin extends Exchange {
         // 5. Envelope: flag(0x00) || sig(64) || pubkey(32)
         // 6. Return base64
         const bcsMsg = this.bcsSerializeBytes (message);
-        const intentMsg = concatBytes (new Uint8Array ([ 3, 0, 0 ]), bcsMsg);
-        const digest = blake2b (intentMsg, { dkLen: 32 });
+        const intentPrefix = this.base16ToBinary ('030000');
+        const intentMsg = this.binaryConcat (intentPrefix, bcsMsg);
+        const digest = this.suiBlake2b256 (intentMsg);
         const keyBytes = this.base16ToBinary (privateKeyHex.replace ('0x', ''));
-        const sig = ed25519.sign (digest, keyBytes);
-        const pubkey = ed25519.getPublicKey (keyBytes);
-        const envelope = concatBytes (new Uint8Array ([ 0x00 ]), sig, pubkey);
+        const sig = this.suiEd25519Sign (digest, keyBytes);
+        const pubkey = this.suiEd25519PublicKey (keyBytes);
+        const flagByte = this.base16ToBinary ('00');
+        const envelope = this.binaryConcat (flagByte, sig, pubkey);
         return this.binaryToBase64 (envelope);
     }
 
-    // ---- Trade request signing ----
-
-    signTradeRequest (payload: BluefinUISignable): string {
-        const json = JSON.stringify (payload, null, 2);
-        return this.suiSignPersonalMessage (utf8ToBytes (json), this.privateKey);
+    jsonPrettyPrint (data: Dict): string {
+        // Pretty-printed JSON with 2-space indent, matching Bluefin SDK's toJson()
+        const keys = Object.keys (data);
+        const lines: string[] = [ '{' ];
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            const value = data[key];
+            let valueStr = undefined;
+            if (typeof value === 'string') {
+                valueStr = '"' + value + '"';
+            } else if (typeof value === 'boolean') {
+                valueStr = value ? 'true' : 'false';
+            } else {
+                valueStr = value.toString ();
+            }
+            const comma = (i < keys.length - 1) ? ',' : '';
+            lines.push ('  "' + key + '": ' + valueStr + comma);
+        }
+        lines.push ('}');
+        return lines.join ('\n');
     }
 
-    // ---- Auth flow ----
+    signTradeRequest (payload: Dict): string {
+        const jsonStr = this.jsonPrettyPrint (payload);
+        return this.suiSignPersonalMessage (this.encode (jsonStr), this.privateKey);
+    }
 
     async authenticate (params = {}): Promise<Dict> {
         this.checkRequiredCredentials ();
         const now = this.milliseconds ();
-        const loginRequest: BluefinLoginRequest = {
+        const loginRequest: Dict = {
             'accountAddress': this.walletAddress,
             'signedAtMillis': now,
             'audience': 'api',
         };
-        const loginJson = JSON.stringify (loginRequest);
-        const signature = this.suiSignPersonalMessage (utf8ToBytes (loginJson), this.privateKey);
+        const loginJson = this.json (loginRequest);
+        const signature = this.suiSignPersonalMessage (this.encode (loginJson), this.privateKey);
         const request: Dict = {
             'accountAddress': loginRequest['accountAddress'],
             'signedAtMillis': loginRequest['signedAtMillis'],
@@ -355,10 +331,8 @@ export default class bluefin extends Exchange {
     }
 
     generateSalt (): string {
-        return (this.milliseconds () + Math.floor (Math.random () * 1000000)).toString ();
+        return this.microseconds ().toString ();
     }
-
-    // ---- Public API methods ----
 
     async fetchMarkets (params = {}): Promise<Market[]> {
         const response = await this.exchangeGetV1ExchangeInfo (params);
@@ -440,9 +414,14 @@ export default class bluefin extends Exchange {
     async fetchOHLCV (symbol: string, timeframe = '1m', since: Int = undefined, limit: Int = undefined, params = {}): Promise<OHLCV[]> {
         await this.loadMarkets ();
         const market = this.market (symbol);
+        const price = this.safeString (params, 'price');
+        params = this.omit (params, 'price');
+        const typeMap: Dict = { 'mark': 'Market', 'index': 'Oracle' };
+        const candleType = this.safeString (typeMap, price, 'Last');
         const request: Dict = {
             'symbol': this.bluefinSymbol (symbol),
             'interval': this.safeString (this.timeframes, timeframe, timeframe),
+            'type': candleType,
         };
         if (since !== undefined) {
             request['startTime'] = since;
@@ -476,8 +455,6 @@ export default class bluefin extends Exchange {
         }
         return result;
     }
-
-    // ---- Private read-only methods ----
 
     async fetchBalance (params = {}): Promise<Balances> {
         await this.loadMarkets ();
@@ -651,9 +628,7 @@ export default class bluefin extends Exchange {
         const cost = this.parseE9 (costE9);
         const fee = this.parseE9 (feeE9);
         // Average price = total cost / total filled qty
-        const average = (filledE9 !== '0')
-            ? Precise.stringDiv (costE9, filledE9)
-            : undefined;
+        const average = (filledE9 !== '0') ? Precise.stringDiv (costE9, filledE9) : undefined;
         const timestamp = this.safeInteger (first, 'executedAtMillis');
         return this.safeOrder ({
             'id': id,
@@ -683,8 +658,6 @@ export default class bluefin extends Exchange {
         }, market);
     }
 
-    // ---- Private write methods ----
-
     async createOrder (symbol: string, type: OrderType, side: OrderSide, amount: number, price: Num = undefined, params = {}): Promise<Order> {
         await this.loadMarkets ();
         await this.getAccessToken ();
@@ -708,9 +681,10 @@ export default class bluefin extends Exchange {
         const quantityE9 = this.toE9 (amountStr);
         const leverageE9 = this.toE9 (leverage);
         const salt = this.generateSalt ();
-        const expiration = (now + 86400000).toString (); // 24h
+        const expirationMs = now + 86400000; // 24h
+        const expiration = expirationMs.toString ();
         const signedAt = now.toString ();
-        const uiPayload: BluefinUIOrderRequest = {
+        const uiPayload: Dict = {
             'type': 'Bluefin Pro Order',
             'ids': idsId,
             'account': this.walletAddress,
@@ -812,7 +786,7 @@ export default class bluefin extends Exchange {
         const leverageE9 = this.toE9 (this.numberToString (leverage));
         const salt = this.generateSalt ();
         const signedAt = now.toString ();
-        const uiPayload: BluefinUILeverageRequest = {
+        const uiPayload: Dict = {
             'type': 'Bluefin Pro Leverage Adjustment',
             'ids': idsId,
             'account': this.walletAddress,
@@ -869,7 +843,7 @@ export default class bluefin extends Exchange {
         const salt = this.generateSalt ();
         const signedAt = now.toString ();
         const isAdd = (operation === 'Add');
-        const uiPayload: BluefinUIMarginRequest = {
+        const uiPayload: Dict = {
             'type': 'Bluefin Pro Margin Adjustment',
             'ids': idsId,
             'account': this.walletAddress,
@@ -907,7 +881,7 @@ export default class bluefin extends Exchange {
         const amountE9 = this.toE9 (this.numberToString (amount));
         const salt = this.generateSalt ();
         const signedAt = now.toString ();
-        const uiPayload: BluefinUIWithdrawRequest = {
+        const uiPayload: Dict = {
             'type': 'Bluefin Pro Withdrawal',
             'eds': edsId,
             'assetSymbol': code,
@@ -930,8 +904,6 @@ export default class bluefin extends Exchange {
         };
         return await this.tradePostApiV1TradeWithdraw (this.extend (request, params));
     }
-
-    // ---- Parsers ----
 
     parseMarket (market: Dict): Market {
         const id = this.safeString (market, 'symbol');
@@ -961,21 +933,21 @@ export default class bluefin extends Exchange {
             'active': status === 'ACTIVE',
             'contractSize': this.parseNumber ('1'),
             'precision': {
-                'price': this.parseE9 (this.safeString (market, 'tickSizeE9')),
-                'amount': this.parseE9 (this.safeString (market, 'stepSizeE9')),
+                'price': this.parseNumber (this.parseE9 (this.safeString (market, 'tickSizeE9'))),
+                'amount': this.parseNumber (this.parseE9 (this.safeString (market, 'stepSizeE9'))),
             },
             'limits': {
                 'amount': {
-                    'min': this.parseE9 (this.safeString (market, 'minOrderQuantityE9')),
-                    'max': this.parseE9 (this.safeString (market, 'maxLimitOrderQuantityE9')),
+                    'min': this.parseNumber (this.parseE9 (this.safeString (market, 'minOrderQuantityE9'))),
+                    'max': this.parseNumber (this.parseE9 (this.safeString (market, 'maxLimitOrderQuantityE9'))),
                 },
                 'price': {
-                    'min': this.parseE9 (this.safeString (market, 'minOrderPriceE9')),
-                    'max': this.parseE9 (this.safeString (market, 'maxOrderPriceE9')),
+                    'min': this.parseNumber (this.parseE9 (this.safeString (market, 'minOrderPriceE9'))),
+                    'max': this.parseNumber (this.parseE9 (this.safeString (market, 'maxOrderPriceE9'))),
                 },
                 'leverage': {
                     'min': this.parseNumber ('1'),
-                    'max': this.parseE9 (this.safeString (market, 'defaultLeverageE9')),
+                    'max': this.parseNumber (this.parseE9 (this.safeString (market, 'defaultLeverageE9'))),
                 },
             },
             'info': market,
@@ -1123,9 +1095,7 @@ export default class bluefin extends Exchange {
         const leverage = this.parseE9 (this.safeString (position, 'clientSetLeverageE9'));
         const isIsolated = this.safeBool (position, 'isIsolated');
         const marginMode = isIsolated ? 'isolated' : 'cross';
-        const collateral = isIsolated
-            ? this.parseE9 (this.safeString (position, 'isolatedMarginE9'))
-            : initialMargin;
+        const collateral = isIsolated ? this.parseE9 (this.safeString (position, 'isolatedMarginE9')) : initialMargin;
         const timestamp = this.safeInteger (position, 'updatedAtMillis');
         return this.safePosition ({
             'id': undefined,
@@ -1227,8 +1197,6 @@ export default class bluefin extends Exchange {
         return this.safeString (sides, side, side);
     }
 
-    // ---- Leverage tiers ----
-
     async fetchLeverageTiers (symbols: Strings = undefined, params = {}): Promise<LeverageTiers> {
         await this.loadMarkets ();
         symbols = this.marketSymbols (symbols);
@@ -1259,31 +1227,31 @@ export default class bluefin extends Exchange {
         // So we invert: highest leverage (last valid entry) → lowest notional → tier 1.
         const maxNotionalAtOpenE9 = this.safeList (info, 'maxNotionalAtOpenE9', []);
         const maintenanceMarginRatioE9 = this.safeString (info, 'maintenanceMarginRatioE9');
-        const mmr = (maintenanceMarginRatioE9 !== undefined)
-            ? this.parseNumber (this.parseE9 (maintenanceMarginRatioE9))
-            : undefined;
+        const mmr = (maintenanceMarginRatioE9 !== undefined) ? this.parseNumber (this.parseE9 (maintenanceMarginRatioE9)) : undefined;
         // Collect valid (leverage, maxNotional) pairs, filter zeros
-        const validPairs: { leverage: number; maxNotional: number; maxNotionalE9: string }[] = [];
-        for (let i = maxNotionalAtOpenE9.length - 1; i >= 0; i--) {
-            const maxNotionalStr = this.safeString (maxNotionalAtOpenE9, i);
+        const validPairs: Dict[] = [];
+        for (let i = 0; i < maxNotionalAtOpenE9.length; i++) {
+            const idx = maxNotionalAtOpenE9.length - 1 - i;
+            const maxNotionalStr = this.safeString (maxNotionalAtOpenE9, idx);
             if (maxNotionalStr === undefined || maxNotionalStr === '0') {
                 continue;
             }
             const maxNotional = this.parseNumber (this.parseE9 (maxNotionalStr));
             validPairs.push ({
-                'leverage': i + 1,
+                'leverage': idx + 1,
                 'maxNotional': maxNotional,
                 'maxNotionalE9': maxNotionalStr,
             });
         }
         // validPairs is now highest-leverage-first (smallest notional first) — exactly what we need
-        const tiers: LeverageTier[] = [];
+        const tiers = [];
         for (let i = 0; i < validPairs.length; i++) {
             const pair = validPairs[i];
             const minNotional = (i === 0) ? 0 : validPairs[i - 1]['maxNotional'];
+            const tierSymbol = (market !== undefined) ? market['symbol'] : undefined;
             tiers.push ({
                 'tier': i + 1,
-                'symbol': (market !== undefined) ? market['symbol'] : undefined,
+                'symbol': tierSymbol,
                 'currency': 'USDC',
                 'minNotional': minNotional,
                 'maxNotional': pair['maxNotional'],
@@ -1297,8 +1265,6 @@ export default class bluefin extends Exchange {
         }
         return tiers;
     }
-
-    // ---- HTTP signing ----
 
     sign (path: string, api = 'public', method = 'GET', params: Dict = {}, headers: any = undefined, body: any = undefined): Dict {
         let url = this.urls['api'][api] + '/' + path;
@@ -1344,8 +1310,6 @@ export default class bluefin extends Exchange {
         return { 'url': url, 'method': method, 'body': body, 'headers': headers };
     }
 
-    // ---- Utility ----
-
     parseE9 (value: Str): Str {
         if (value === undefined) {
             return undefined;
@@ -1366,8 +1330,8 @@ export default class bluefin extends Exchange {
         return precise.toString ();
     }
 
-    convertE9Levels (levels: any[]): any[][] {
-        const result: any[][] = [];
+    convertE9Levels (levels) {
+        const result = [];
         for (let i = 0; i < levels.length; i++) {
             const level = levels[i];
             result.push ([

@@ -5,8 +5,12 @@
 
 from ccxt.base.exchange import Exchange
 from ccxt.abstract.bluefin import ImplicitAPI
-from ccxt.base.types import Any, Balances, Int, Market, Num, Order, OrderBook, OrderSide, OrderType, Position, Str, Strings, Ticker, Tickers, Trade, FundingRateHistory
+import hashlib
+from ccxt.base.types import Any, Balances, Int, LeverageTier, LeverageTiers, Market, Num, Order, OrderBook, OrderSide, OrderType, Position, Str, Strings, Ticker, Tickers, Trade, FundingRateHistory
 from typing import List
+from ccxt.base.errors import AuthenticationError
+from ccxt.base.errors import ArgumentsRequired
+from ccxt.base.errors import OrderNotFound
 from ccxt.base.decimal_to_precision import TICK_SIZE
 from ccxt.base.precise import Precise
 
@@ -41,11 +45,14 @@ class bluefin(Exchange, ImplicitAPI):
                 'cancelOrders': True,
                 'createOrder': True,
                 'fetchBalance': True,
+                'fetchClosedOrders': True,
                 'fetchFundingRateHistory': True,
+                'fetchLeverageTiers': True,
                 'fetchMarkets': True,
                 'fetchMyTrades': True,
                 'fetchOHLCV': True,
                 'fetchOpenOrders': True,
+                'fetchOrder': True,
                 'fetchOrderBook': True,
                 'fetchPositions': True,
                 'fetchTicker': True,
@@ -120,11 +127,13 @@ class bluefin(Exchange, ImplicitAPI):
                         'api/v1/account/trades',
                         'api/v1/account/transactions',
                         'api/v1/account/fundingRateHistory',
-                        'api/v1/trade/openOrders',
-                        'api/v1/trade/standbyOrders',
                     ],
                 },
                 'trade': {
+                    'get': [
+                        'api/v1/trade/openOrders',
+                        'api/v1/trade/standbyOrders',
+                    ],
                     'post': [
                         'api/v1/trade/orders',
                         'api/v1/trade/withdraw',
@@ -149,9 +158,171 @@ class bluefin(Exchange, ImplicitAPI):
             },
         })
 
+    def bcs_serialize_bytes(self, data: Any) -> Any:
+        # BCS encoding for a byte vector: ULEB128 length prefix followed by raw bytes
+        remaining = len(data)
+        result = self.base16_to_binary('')
+        while(remaining >= 0x80):
+            byte = (remaining & 0x7f) | 0x80
+            result = self.binary_concat(result, self.number_to_be(byte, 1))
+            remaining >>= 7
+        result = self.binary_concat(result, self.number_to_be(remaining, 1))
+        return self.binary_concat(result, data)
+
+    def sui_blake2b256(self, data: Any) -> Any:
+        # Blake2b-256 hash (32-byte digest) — Python override (hashlib)
+        import hashlib
+        return hashlib.new('blake2b', data, digest_size=32).digest()
+
+    def sui_ed25519_sign(self, digest: Any, keyBytes: Any) -> Any:
+        # Ed25519 raw signature (64 bytes) — Python override (cryptography)
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        private_key = Ed25519PrivateKey.from_private_bytes(keyBytes)
+        return private_key.sign(digest)
+
+    def sui_ed25519_public_key(self, keyBytes: Any) -> Any:
+        # Derive Ed25519 public key (32 bytes) — Python override (cryptography)
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        private_key = Ed25519PrivateKey.from_private_bytes(keyBytes)
+        return private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+    def sui_sign_personal_message(self, message: Any, privateKeyHex: str) -> str:
+        # Sui personal-message signing:
+        # 1. BCS-serialize the message(ULEB128 length + bytes)
+        # 2. Prepend intent bytes [3, 0, 0](PersonalMessage)
+        # 3. Blake2b-256 hash the intent-prefixed message
+        # 4. Ed25519-sign the hash
+        # 5. Envelope: flag(0x00) or sig(64) or pubkey(32)
+        # 6. Return base64
+        bcsMsg = self.bcs_serialize_bytes(message)
+        intentPrefix = self.base16_to_binary('030000')
+        intentMsg = self.binary_concat(intentPrefix, bcsMsg)
+        digest = self.sui_blake2b256(intentMsg)
+        keyBytes = self.base16_to_binary(privateKeyHex.replace('0x', ''))
+        sig = self.sui_ed25519_sign(digest, keyBytes)
+        pubkey = self.sui_ed25519_public_key(keyBytes)
+        flagByte = self.base16_to_binary('00')
+        envelope = self.binary_concat(flagByte, sig, pubkey)
+        return self.binary_to_base64(envelope)
+
+    def json_pretty_print(self, data: dict) -> str:
+        # Pretty-printed JSON with 2-space indent, matching Bluefin SDK's toJson()
+        keys = list(data.keys())
+        lines: List[str] = ['{']
+        for i in range(0, len(keys)):
+            key = keys[i]
+            value = data[key]
+            valueStr = None
+            if isinstance(value, str):
+                valueStr = '"' + value + '"'
+            elif isinstance(value, bool):
+                valueStr = 'true' if value else 'false'
+            else:
+                valueStr = str(value)
+            comma = ',' if (i < len(keys) - 1) else ''
+            lines.append('  "' + key + '": ' + valueStr + comma)
+        lines.append('}')
+        return '\n'.join(lines)
+
+    def sign_trade_request(self, payload: dict) -> str:
+        jsonStr = self.json_pretty_print(payload)
+        return self.sui_sign_personal_message(self.encode(jsonStr), self.privateKey)
+
+    def authenticate(self, params={}) -> dict:
+        self.check_required_credentials()
+        now = self.milliseconds()
+        loginRequest: dict = {
+            'accountAddress': self.walletAddress,
+            'signedAtMillis': now,
+            'audience': 'api',
+        }
+        loginJson = self.json(loginRequest)
+        signature = self.sui_sign_personal_message(self.encode(loginJson), self.privateKey)
+        request: dict = {
+            'accountAddress': loginRequest['accountAddress'],
+            'signedAtMillis': loginRequest['signedAtMillis'],
+            'audience': loginRequest['audience'],
+            'payloadSignature': signature,
+        }
+        response = self.authPostAuthV2Token(self.extend(request, params))
+        accessToken = self.safe_string(response, 'accessToken')
+        refreshToken = self.safe_string(response, 'refreshToken')
+        accessValidFor = self.safe_number(response, 'accessTokenValidForSeconds', 300)
+        refreshValidFor = self.safe_number(response, 'refreshTokenValidForSeconds', 2592000)
+        if accessToken is None:
+            raise AuthenticationError(self.id + ' authenticate() failed — no accessToken in response')
+        nowSeconds = now / 1000
+        self.options['accessToken'] = accessToken
+        self.options['refreshToken'] = refreshToken
+        self.options['tokenSetAtSeconds'] = nowSeconds
+        self.options['accessTokenValidForSeconds'] = accessValidFor
+        self.options['refreshTokenValidForSeconds'] = refreshValidFor
+        return response
+
+    def refresh_access_token(self, params={}) -> dict:
+        refreshToken = self.safe_string(self.options, 'refreshToken')
+        if refreshToken is None:
+            return self.authenticate(params)
+        request: dict = {
+            'refreshToken': refreshToken,
+        }
+        response = self.authPutAuthTokenRefresh(self.extend(request, params))
+        accessToken = self.safe_string(response, 'accessToken')
+        newRefreshToken = self.safe_string(response, 'refreshToken')
+        accessValidFor = self.safe_number(response, 'accessTokenValidForSeconds', 300)
+        refreshValidFor = self.safe_number(response, 'refreshTokenValidForSeconds', 2592000)
+        if accessToken is None:
+            raise AuthenticationError(self.id + ' refreshAccessToken() failed — no accessToken in response')
+        nowSeconds = self.milliseconds() / 1000
+        self.options['accessToken'] = accessToken
+        self.options['refreshToken'] = newRefreshToken
+        self.options['tokenSetAtSeconds'] = nowSeconds
+        self.options['accessTokenValidForSeconds'] = accessValidFor
+        self.options['refreshTokenValidForSeconds'] = refreshValidFor
+        return response
+
+    def is_access_token_expired(self) -> bool:
+        token = self.safe_string(self.options, 'accessToken')
+        tokenSetAt = self.safe_number(self.options, 'tokenSetAtSeconds')
+        if token is None or tokenSetAt is None:
+            return True
+        lifetime = self.safe_number(self.options, 'accessTokenValidForSeconds', 300)
+        nowSeconds = self.milliseconds() / 1000
+        # Refresh at 80% of lifetime(matching SDK)
+        return nowSeconds >= (tokenSetAt + lifetime * 0.8)
+
+    def is_refresh_token_valid(self) -> bool:
+        refreshToken = self.safe_string(self.options, 'refreshToken')
+        tokenSetAt = self.safe_number(self.options, 'tokenSetAtSeconds')
+        if refreshToken is None or tokenSetAt is None:
+            return False
+        lifetime = self.safe_number(self.options, 'refreshTokenValidForSeconds', 2592000)
+        nowSeconds = self.milliseconds() / 1000
+        # 60 second safety buffer
+        return nowSeconds <(tokenSetAt + lifetime - 60)
+
+    def get_access_token(self) -> str:
+        token = self.safe_string(self.options, 'accessToken')
+        if token is None:
+            self.authenticate()
+            return self.options['accessToken']
+        if self.is_access_token_expired():
+            if self.is_refresh_token_valid():
+                self.refresh_access_token()
+            else:
+                self.authenticate()
+        return self.options['accessToken']
+
+    def generate_salt(self) -> str:
+        return str(self.microseconds())
+
     def fetch_markets(self, params={}) -> List[Market]:
         response = self.exchangeGetV1ExchangeInfo(params)
         markets = self.safe_list(response, 'markets', [])
+        contractsConfig = self.safe_dict(response, 'contractsConfig')
+        if contractsConfig is not None:
+            self.options['contractsConfig'] = contractsConfig
         result: List[Market] = []
         for i in range(0, len(markets)):
             result.append(self.parse_market(markets[i]))
@@ -214,9 +385,14 @@ class bluefin(Exchange, ImplicitAPI):
     def fetch_ohlcv(self, symbol: str, timeframe='1m', since: Int = None, limit: Int = None, params={}) -> List[list]:
         self.load_markets()
         market = self.market(symbol)
+        price = self.safe_string(params, 'price')
+        params = self.omit(params, 'price')
+        typeMap: dict = {'mark': 'Market', 'index': 'Oracle'}
+        candleType = self.safe_string(typeMap, price, 'Last')
         request: dict = {
             'symbol': self.bluefin_symbol(symbol),
             'interval': self.safe_string(self.timeframes, timeframe, timeframe),
+            'type': candleType,
         }
         if since is not None:
             request['startTime'] = since
@@ -243,72 +419,400 @@ class bluefin(Exchange, ImplicitAPI):
         return result
 
     def fetch_balance(self, params={}) -> Balances:
-        # TODO: call accountGetApiV1Account(needs JWT),
-        #       parse via parseBalance
-        #
-        # self.load_markets()
-        # response = self.accountGetApiV1Account(params)
-        # return self.parse_balance(response)
-        raise Error('fetchBalance not implemented')
+        self.load_markets()
+        self.get_access_token()
+        response = self.accountGetApiV1Account(params)
+        return self.parse_balance(response)
 
     def fetch_positions(self, symbols: Strings = None, params={}) -> List[Position]:
-        # TODO: call accountGetApiV1Account(needs JWT),
-        #       extract positions array, parse each via parsePosition
-        raise Error('fetchPositions not implemented')
+        self.load_markets()
+        self.get_access_token()
+        response = self.accountGetApiV1Account(params)
+        positions = self.safe_list(response, 'positions', [])
+        result: List[Position] = []
+        for i in range(0, len(positions)):
+            position = self.parse_position(positions[i])
+            if symbols is not None and not self.in_array(position['symbol'], symbols):
+                continue
+            result.append(position)
+        return result
 
     def fetch_my_trades(self, symbol: Str = None, since: Int = None, limit: Int = None, params={}) -> List[Trade]:
-        # TODO: call accountGetApiV1AccountTrades(needs JWT),
-        #       parse each via parseTrade
-        raise Error('fetchMyTrades not implemented')
+        self.load_markets()
+        self.get_access_token()
+        request: dict = {}
+        if symbol is not None:
+            request['symbol'] = self.bluefin_symbol(symbol)
+        if limit is not None:
+            request['limit'] = limit
+        response = self.accountGetApiV1AccountTrades(self.extend(request, params))
+        market = self.market(symbol) if (symbol is not None) else None
+        result: List[Trade] = []
+        trades = response if isinstance(response, list) else self.safe_list(response, 'trades', [])
+        for i in range(0, len(trades)):
+            result.append(self.parse_trade(trades[i], market))
+        return result
 
     def fetch_open_orders(self, symbol: Str = None, since: Int = None, limit: Int = None, params={}) -> List[Order]:
-        # TODO: call accountGetApiV1TradeOpenOrders(needs JWT),
-        #       parse each via parseOrder
-        raise Error('fetchOpenOrders not implemented')
+        self.load_markets()
+        self.get_access_token()
+        request: dict = {}
+        if symbol is not None:
+            request['symbol'] = self.bluefin_symbol(symbol)
+        response = self.tradeGetApiV1TradeOpenOrders(self.extend(request, params))
+        market = self.market(symbol) if (symbol is not None) else None
+        orders = response if isinstance(response, list) else self.safe_list(response, 'orders', [])
+        result: List[Order] = []
+        for i in range(0, len(orders)):
+            result.append(self.parse_order(orders[i], market))
+        return result
+
+    def fetch_order(self, id: str, symbol: Str = None, params={}) -> Order:
+        # Bluefin has no individual order lookup endpoint.
+        # Strategy: check openOrders → standbyOrders → reconstruct from trades.
+        self.load_markets()
+        self.get_access_token()
+        request: dict = {}
+        market: Market = None
+        if symbol is not None:
+            market = self.market(symbol)
+            request['symbol'] = self.bluefin_symbol(symbol)
+        # 1. Search open orders
+        openResponse = self.tradeGetApiV1TradeOpenOrders(self.extend(request, params))
+        openOrders = openResponse if isinstance(openResponse, list) else self.safe_list(openResponse, 'orders', [])
+        for i in range(0, len(openOrders)):
+            if self.safe_string(openOrders[i], 'orderHash') == id:
+                return self.parse_order(openOrders[i], market)
+        # 2. Search standby orders(conditional/trigger orders)
+        standbyResponse = self.tradeGetApiV1TradeStandbyOrders(self.extend(request, params))
+        standbyOrders = standbyResponse if isinstance(standbyResponse, list) else self.safe_list(standbyResponse, 'orders', [])
+        for i in range(0, len(standbyOrders)):
+            if self.safe_string(standbyOrders[i], 'orderHash') == id:
+                return self.parse_order(standbyOrders[i], market)
+        # 3. Reconstruct from trades(order was filled/closed)
+        tradeRequest: dict = {}
+        if symbol is not None:
+            tradeRequest['symbol'] = self.bluefin_symbol(symbol)
+        tradeResponse = self.accountGetApiV1AccountTrades(self.extend(tradeRequest, params))
+        trades = tradeResponse if isinstance(tradeResponse, list) else self.safe_list(tradeResponse, 'trades', [])
+        matchingTrades: List[dict] = []
+        for i in range(0, len(trades)):
+            if self.safe_string(trades[i], 'orderHash') == id:
+                matchingTrades.append(trades[i])
+        if len(matchingTrades) > 0:
+            return self.reconstruct_order_from_trades(id, matchingTrades, market)
+        raise OrderNotFound(self.id + ' fetchOrder() order ' + id + ' not found')
+
+    def fetch_closed_orders(self, symbol: Str = None, since: Int = None, limit: Int = None, params={}) -> List[Order]:
+        self.load_markets()
+        self.get_access_token()
+        request: dict = {}
+        market: Market = None
+        if symbol is not None:
+            market = self.market(symbol)
+            request['symbol'] = self.bluefin_symbol(symbol)
+        if since is not None:
+            request['startTimeAtMillis'] = since
+        if limit is not None:
+            request['limit'] = limit
+        response = self.accountGetApiV1AccountTrades(self.extend(request, params))
+        trades = response if isinstance(response, list) else self.safe_list(response, 'trades', [])
+        # Group trades by orderHash
+        grouped: dict = {}
+        for i in range(0, len(trades)):
+            orderHash = self.safe_string(trades[i], 'orderHash')
+            if orderHash is None:
+                continue
+            if grouped[orderHash] is None:
+                grouped[orderHash] = []
+            grouped[orderHash].append(trades[i])
+        # Reconstruct one Order per unique orderHash
+        result: List[Order] = []
+        orderHashes = list(grouped.keys())
+        for i in range(0, len(orderHashes)):
+            result.append(self.reconstruct_order_from_trades(orderHashes[i], grouped[orderHashes[i]], market))
+        return result
+
+    def reconstruct_order_from_trades(self, id: str, trades: List[dict], market: Market = None) -> Order:
+        # Reconstruct a closed Order from its constituent trade fills.
+        # All trades share the same orderHash, side, symbol.
+        first = trades[0]
+        bluefinSym = self.safe_string(first, 'symbol')
+        symbol = self.ccxt_symbol(bluefinSym) if (bluefinSym is not None) else None
+        side = self.parse_order_side(self.safe_string(first, 'side'))
+        # Aggregate: total filled qty, total cost, total fee, latest timestamp
+        filledE9 = '0'
+        costE9 = '0'
+        feeE9 = '0'
+        lastTimestamp = 0
+        for i in range(0, len(trades)):
+            qtyStr = self.safe_string(trades[i], 'quantityE9', '0')
+            costStr = self.safe_string(trades[i], 'quoteQuantityE9', '0')
+            feeStr = self.safe_string(trades[i], 'tradingFeeE9', '0')
+            filledE9 = Precise.string_add(filledE9, qtyStr)
+            costE9 = Precise.string_add(costE9, costStr)
+            feeE9 = Precise.string_add(feeE9, feeStr)
+            ts = self.safe_integer(trades[i], 'executedAtMillis', 0)
+            if ts > lastTimestamp:
+                lastTimestamp = ts
+        filled = self.parse_e9(filledE9)
+        cost = self.parse_e9(costE9)
+        fee = self.parse_e9(feeE9)
+        # Average price = total cost / total filled qty
+        average = Precise.string_div(costE9, filledE9) if (filledE9 != '0') else None
+        timestamp = self.safe_integer(first, 'executedAtMillis')
+        return self.safe_order({
+            'id': id,
+            'clientOrderId': None,
+            'info': trades,
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+            'lastTradeTimestamp': lastTimestamp,
+            'symbol': symbol,
+            'type': None,
+            'timeInForce': None,
+            'postOnly': None,
+            'reduceOnly': None,
+            'side': side,
+            'price': None,
+            'amount': None,
+            'filled': filled,
+            'remaining': self.parse_number('0'),
+            'cost': cost,
+            'average': average,
+            'status': 'closed',
+            'fee': {
+                'cost': self.parse_number(fee),
+                'currency': 'USDC',
+            },
+            'trades': None,
+        }, market)
 
     def create_order(self, symbol: str, type: OrderType, side: OrderSide, amount: float, price: Num = None, params={}) -> Order:
-        # TODO:
-        #  1. loadMarkets, resolve market
-        #  2. Build signedFields:
-        #     {market, price(E9), quantity(E9), leverage(E9),
-        #       side: BUY/SELL, reduceOnly, salt, expiration, orderType}
-        #  3. Sign fields with Ed25519 via signRequest()
-        #  4. POST to tradePostApiV1TradeOrders with signed payload + JWT
-        #  5. Parse response via parseOrder
-        raise Error('createOrder not implemented')
+        self.load_markets()
+        self.get_access_token()
+        market = self.market(symbol)
+        contractsConfig = self.safe_dict(self.options, 'contractsConfig', {})
+        idsId = self.safe_string(contractsConfig, 'idsId')
+        if idsId is None:
+            raise ArgumentsRequired(self.id + ' createOrder() requires contractsConfig.idsId from fetchMarkets()')
+        now = self.milliseconds()
+        leverage = self.safe_string(params, 'leverage', '1')
+        isIsolated = self.safe_bool(params, 'isIsolated', False)
+        reduceOnly = self.safe_bool(params, 'reduceOnly', False)
+        postOnly = self.safe_bool(params, 'postOnly', False)
+        timeInForce = self.safe_string(params, 'timeInForce')
+        clientOrderId = self.safe_string(params, 'clientOrderId')
+        bluefinSide = 'LONG' if (side == 'buy') else 'SHORT'
+        priceStr = self.number_to_string(price) if (price is not None) else '0'
+        amountStr = self.number_to_string(amount)
+        priceE9 = self.to_e9(priceStr)
+        quantityE9 = self.to_e9(amountStr)
+        leverageE9 = self.to_e9(leverage)
+        salt = self.generate_salt()
+        expirationMs = now + 86400000  # 24h
+        expiration = str(expirationMs)
+        signedAt = str(now)
+        uiPayload: dict = {
+            'type': 'Bluefin Pro Order',
+            'ids': idsId,
+            'account': self.walletAddress,
+            'market': market['id'],
+            'price': priceE9,
+            'quantity': quantityE9,
+            'leverage': leverageE9,
+            'side': bluefinSide,
+            'positionType': 'ISOLATED' if isIsolated else 'CROSS',
+            'expiration': expiration,
+            'salt': salt,
+            'signedAt': signedAt,
+        }
+        signature = self.sign_trade_request(uiPayload)
+        request: dict = {
+            'signedFields': {
+                'symbol': market['id'],
+                'accountAddress': self.walletAddress,
+                'priceE9': priceE9,
+                'quantityE9': quantityE9,
+                'side': bluefinSide,
+                'leverageE9': leverageE9,
+                'isIsolated': isIsolated,
+                'salt': salt,
+                'idsId': idsId,
+                'expiresAtMillis': self.parse_to_int(expiration),
+                'signedAtMillis': now,
+            },
+            'signature': signature,
+            'type': type.upper(),
+            'reduceOnly': reduceOnly,
+        }
+        if postOnly:
+            request['postOnly'] = True
+        if timeInForce is not None:
+            request['timeInForce'] = timeInForce
+        if clientOrderId is not None:
+            request['clientOrderId'] = clientOrderId
+        cleanParams = self.omit(params, ['leverage', 'isIsolated', 'reduceOnly', 'postOnly', 'timeInForce', 'clientOrderId'])
+        response = self.tradePostApiV1TradeOrders(self.extend(request, cleanParams))
+        return self.parse_order(response, market)
 
     def cancel_order(self, id: str, symbol: Str = None, params={}) -> Order:
-        # TODO: build cancel payload with orderId(s),
-        #       sign via signRequest, PUT to tradePutApiV1TradeOrdersCancel
-        raise Error('cancelOrder not implemented')
+        self.load_markets()
+        self.get_access_token()
+        request: dict = {
+            'orderHashes': [id],
+        }
+        if symbol is not None:
+            request['symbol'] = self.bluefin_symbol(symbol)
+        response = self.tradePutApiV1TradeOrdersCancel(self.extend(request, params))
+        return self.safe_order({
+            'id': id,
+            'info': response,
+            'status': 'canceled',
+        })
 
     def cancel_orders(self, ids: List[str], symbol: Str = None, params={}) -> List[Order]:
-        # TODO: batch cancel — same endpoint, multiple orderIds
-        raise Error('cancelOrders not implemented')
+        self.load_markets()
+        self.get_access_token()
+        request: dict = {
+            'orderHashes': ids,
+        }
+        if symbol is not None:
+            request['symbol'] = self.bluefin_symbol(symbol)
+        response = self.tradePutApiV1TradeOrdersCancel(self.extend(request, params))
+        cancelledHashes = self.safe_list(response, 'orderHashes', ids)
+        result: List[Order] = []
+        for i in range(0, len(cancelledHashes)):
+            result.append(self.safe_order({
+                'id': cancelledHashes[i],
+                'info': response,
+                'status': 'canceled',
+            }))
+        return result
 
     def set_leverage(self, leverage: Int, symbol: Str = None, params={}) -> Any:
-        # TODO: build payload {symbol, leverageE9: toE9(leverage)},
-        #       sign with signRequest, PUT to tradePutApiV1TradeLeverage
-        raise Error('setLeverage not implemented')
+        if symbol is None:
+            raise ArgumentsRequired(self.id + ' setLeverage() requires a symbol argument')
+        self.load_markets()
+        self.get_access_token()
+        market = self.market(symbol)
+        contractsConfig = self.safe_dict(self.options, 'contractsConfig', {})
+        idsId = self.safe_string(contractsConfig, 'idsId')
+        if idsId is None:
+            raise ArgumentsRequired(self.id + ' setLeverage() requires contractsConfig.idsId from fetchMarkets()')
+        now = self.milliseconds()
+        leverageE9 = self.to_e9(self.number_to_string(leverage))
+        salt = self.generate_salt()
+        signedAt = str(now)
+        uiPayload: dict = {
+            'type': 'Bluefin Pro Leverage Adjustment',
+            'ids': idsId,
+            'account': self.walletAddress,
+            'market': market['id'],
+            'leverage': leverageE9,
+            'salt': salt,
+            'signedAt': signedAt,
+        }
+        signature = self.sign_trade_request(uiPayload)
+        request: dict = {
+            'signedFields': {
+                'accountAddress': self.walletAddress,
+                'symbol': market['id'],
+                'leverageE9': leverageE9,
+                'salt': salt,
+                'idsId': idsId,
+                'signedAtMillis': now,
+            },
+            'signature': signature,
+        }
+        return self.tradePutApiV1TradeLeverage(self.extend(request, params))
 
     def set_margin_mode(self, marginMode: str, symbol: Str = None, params={}) -> Any:
-        # TODO: Bluefin sets margin mode via the leverage endpoint
-        #       (isolated vs cross is a field on the leverage request)
-        raise Error('setMarginMode not implemented')
+        # Bluefin sets margin mode per-order via the isIsolated field.
+        # Store the preference so createOrder can use it.
+        mode = marginMode.lower()
+        if mode != 'isolated' and mode != 'cross':
+            raise ArgumentsRequired(self.id + ' setMarginMode() marginMode must be "isolated" or "cross"')
+        self.options['defaultMarginMode'] = mode
+        return {'info': mode}
 
     def add_margin(self, symbol: str, amount: float, params={}) -> Any:
-        # TODO: PUT to tradePutApiV1TradeAdjustIsolatedMargin
-        #       with positive amount(E9)
-        raise Error('addMargin not implemented')
+        return self.adjust_margin(symbol, amount, 'Add', params)
 
     def reduce_margin(self, symbol: str, amount: float, params={}) -> Any:
-        # TODO: PUT to tradePutApiV1TradeAdjustIsolatedMargin
-        #       with negative amount(E9)
-        raise Error('reduceMargin not implemented')
+        return self.adjust_margin(symbol, amount, 'Remove', params)
+
+    def adjust_margin(self, symbol: str, amount: float, operation: str, params={}) -> Any:
+        self.load_markets()
+        self.get_access_token()
+        market = self.market(symbol)
+        contractsConfig = self.safe_dict(self.options, 'contractsConfig', {})
+        idsId = self.safe_string(contractsConfig, 'idsId')
+        if idsId is None:
+            raise ArgumentsRequired(self.id + ' adjustMargin() requires contractsConfig.idsId from fetchMarkets()')
+        now = self.milliseconds()
+        quantityE9 = self.to_e9(self.number_to_string(amount))
+        salt = self.generate_salt()
+        signedAt = str(now)
+        isAdd = (operation == 'Add')
+        uiPayload: dict = {
+            'type': 'Bluefin Pro Margin Adjustment',
+            'ids': idsId,
+            'account': self.walletAddress,
+            'market': market['id'],
+            'add': isAdd,
+            'amount': quantityE9,
+            'salt': salt,
+            'signedAt': signedAt,
+        }
+        signature = self.sign_trade_request(uiPayload)
+        request: dict = {
+            'signedFields': {
+                'idsId': idsId,
+                'accountAddress': self.walletAddress,
+                'symbol': market['id'],
+                'operation': operation,
+                'quantityE9': quantityE9,
+                'salt': salt,
+                'signedAtMillis': now,
+            },
+            'signature': signature,
+        }
+        return self.tradePutApiV1TradeAdjustIsolatedMargin(self.extend(request, params))
 
     def withdraw(self, code: str, amount: float, address: str, tag: Str = None, params={}) -> Any:
-        # TODO: POST to tradePostApiV1TradeWithdraw, signed
-        raise Error('withdraw not implemented')
+        self.load_markets()
+        self.get_access_token()
+        contractsConfig = self.safe_dict(self.options, 'contractsConfig', {})
+        edsId = self.safe_string(contractsConfig, 'edsId')
+        if edsId is None:
+            raise ArgumentsRequired(self.id + ' withdraw() requires contractsConfig.edsId from fetchMarkets()')
+        now = self.milliseconds()
+        amountE9 = self.to_e9(self.number_to_string(amount))
+        salt = self.generate_salt()
+        signedAt = str(now)
+        uiPayload: dict = {
+            'type': 'Bluefin Pro Withdrawal',
+            'eds': edsId,
+            'assetSymbol': code,
+            'account': self.walletAddress,
+            'amount': amountE9,
+            'salt': salt,
+            'signedAt': signedAt,
+        }
+        signature = self.sign_trade_request(uiPayload)
+        request: dict = {
+            'signedFields': {
+                'assetSymbol': code,
+                'accountAddress': self.walletAddress,
+                'amountE9': amountE9,
+                'salt': salt,
+                'edsId': edsId,
+                'signedAtMillis': now,
+            },
+            'signature': signature,
+        }
+        return self.tradePostApiV1TradeWithdraw(self.extend(request, params))
 
     def parse_market(self, market: dict) -> Market:
         id = self.safe_string(market, 'symbol')
@@ -338,21 +842,21 @@ class bluefin(Exchange, ImplicitAPI):
             'active': status == 'ACTIVE',
             'contractSize': self.parse_number('1'),
             'precision': {
-                'price': self.parse_e9(self.safe_string(market, 'tickSizeE9')),
-                'amount': self.parse_e9(self.safe_string(market, 'stepSizeE9')),
+                'price': self.parse_number(self.parse_e9(self.safe_string(market, 'tickSizeE9'))),
+                'amount': self.parse_number(self.parse_e9(self.safe_string(market, 'stepSizeE9'))),
             },
             'limits': {
                 'amount': {
-                    'min': self.parse_e9(self.safe_string(market, 'minOrderQuantityE9')),
-                    'max': self.parse_e9(self.safe_string(market, 'maxLimitOrderQuantityE9')),
+                    'min': self.parse_number(self.parse_e9(self.safe_string(market, 'minOrderQuantityE9'))),
+                    'max': self.parse_number(self.parse_e9(self.safe_string(market, 'maxLimitOrderQuantityE9'))),
                 },
                 'price': {
-                    'min': self.parse_e9(self.safe_string(market, 'minOrderPriceE9')),
-                    'max': self.parse_e9(self.safe_string(market, 'maxOrderPriceE9')),
+                    'min': self.parse_number(self.parse_e9(self.safe_string(market, 'minOrderPriceE9'))),
+                    'max': self.parse_number(self.parse_e9(self.safe_string(market, 'maxOrderPriceE9'))),
                 },
                 'leverage': {
                     'min': self.parse_number('1'),
-                    'max': self.parse_e9(self.safe_string(market, 'defaultLeverageE9')),
+                    'max': self.parse_number(self.parse_e9(self.safe_string(market, 'defaultLeverageE9'))),
                 },
             },
             'info': market,
@@ -414,20 +918,30 @@ class bluefin(Exchange, ImplicitAPI):
         cost = self.parse_e9(self.safe_string(trade, 'quoteQuantityE9'))
         side = self.parse_order_side(self.safe_string(trade, 'side'))
         timestamp = self.safe_integer(trade, 'executedAtMillis')
+        orderId = self.safe_string(trade, 'orderHash')
+        takerOrMaker = self.safe_string_lower(trade, 'makerTaker')
+        # Private trades include fee info
+        fee = None
+        feeE9 = self.safe_string(trade, 'tradingFeeE9')
+        if feeE9 is not None:
+            fee = {
+                'cost': self.parse_number(self.parse_e9(feeE9)),
+                'currency': 'USDC',
+            }
         return self.safe_trade({
             'id': id,
             'info': trade,
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
             'symbol': symbol,
-            'order': None,
+            'order': orderId,
             'type': None,
             'side': side,
-            'takerOrMaker': None,
+            'takerOrMaker': takerOrMaker,
             'price': price,
             'amount': amount,
             'cost': cost,
-            'fee': None,
+            'fee': fee,
         }, market)
 
     def parse_order(self, order: dict, market: Market = None) -> Order:
@@ -485,8 +999,7 @@ class bluefin(Exchange, ImplicitAPI):
         leverage = self.parse_e9(self.safe_string(position, 'clientSetLeverageE9'))
         isIsolated = self.safe_bool(position, 'isIsolated')
         marginMode = 'isolated' if isIsolated else 'cross'
-        collateral = self.parse_e9(self.safe_string(position, 'isolatedMarginE9'))
-            if isIsolated else initialMargin
+        collateral = self.parse_e9(self.safe_string(position, 'isolatedMarginE9')) if isIsolated else initialMargin
         timestamp = self.safe_integer(position, 'updatedAtMillis')
         return self.safe_position({
             'id': None,
@@ -581,30 +1094,93 @@ class bluefin(Exchange, ImplicitAPI):
         }
         return self.safe_string(sides, side, side)
 
+    def fetch_leverage_tiers(self, symbols: Strings = None, params={}) -> LeverageTiers:
+        self.load_markets()
+        symbols = self.market_symbols(symbols)
+        result: LeverageTiers = {}
+        marketIds = list(self.markets.keys())
+        for i in range(0, len(marketIds)):
+            market = self.markets[marketIds[i]]
+            if not market['swap']:
+                continue
+            symbol = market['symbol']
+            if symbols is not None and not self.in_array(symbol, symbols):
+                continue
+            tiers = self.parse_market_leverage_tiers(market['info'], market)
+            if len(tiers) > 0:
+                result[symbol] = tiers
+        return result
+
+    def parse_market_leverage_tiers(self, info: dict, market: Market = None) -> List[LeverageTier]:
+        # maxNotionalAtOpenE9 is an array where index i = max open notional
+        # at leverage(i+1)x. Higher leverage → lower max notional.
+        # CCXT convention: tiers are sorted by ascending notional range,
+        # each tier specifying the max leverage allowed at that notional bracket.
+        # So we invert: highest leverage(last valid entry) → lowest notional → tier 1.
+        maxNotionalAtOpenE9 = self.safe_list(info, 'maxNotionalAtOpenE9', [])
+        maintenanceMarginRatioE9 = self.safe_string(info, 'maintenanceMarginRatioE9')
+        mmr = self.parse_number(self.parse_e9(maintenanceMarginRatioE9)) if (maintenanceMarginRatioE9 is not None) else None
+        # Collect valid(leverage, maxNotional) pairs, filter zeros
+        validPairs: List[dict] = []
+        for i in range(0, len(maxNotionalAtOpenE9)):
+            idx = len(maxNotionalAtOpenE9) - 1 - i
+            maxNotionalStr = self.safe_string(maxNotionalAtOpenE9, idx)
+            if maxNotionalStr is None or maxNotionalStr == '0':
+                continue
+            maxNotional = self.parse_number(self.parse_e9(maxNotionalStr))
+            validPairs.append({
+                'leverage': idx + 1,
+                'maxNotional': maxNotional,
+                'maxNotionalE9': maxNotionalStr,
+            })
+        # validPairs is now highest-leverage-first(smallest notional first) — exactly what we need
+        tiers = []
+        for i in range(0, len(validPairs)):
+            pair = validPairs[i]
+            minNotional = 0 if (i == 0) else validPairs[i - 1]['maxNotional']
+            tierSymbol = market['symbol'] if (market is not None) else None
+            tiers.append({
+                'tier': i + 1,
+                'symbol': tierSymbol,
+                'currency': 'USDC',
+                'minNotional': minNotional,
+                'maxNotional': pair['maxNotional'],
+                'maintenanceMarginRate': mmr,
+                'maxLeverage': pair['leverage'],
+                'info': {
+                    'maxNotionalE9': pair['maxNotionalE9'],
+                    'leverage': pair['leverage'],
+                },
+            })
+        return tiers
+
     def sign(self, path: str, api='public', method='GET', params: dict = {}, headers: Any = None, body: Any = None) -> dict:
-        #
-        # CCXT calls self for every HTTP request.  We attach auth headers
-        # only for private API groups(account, trade).
-        #
         url = self.urls['api'][api] + '/' + path
-        if api == 'exchange' or api == 'auth':
-            # Public endpoints — no auth header
+        if api == 'exchange':
             if method == 'GET':
                 if params:
                     url += '?' + self.urlencode(params)
             else:
                 headers = {'Content-Type': 'application/json'}
                 body = self.json(params)
+        elif api == 'auth':
+            # Auth endpoints: route payloadSignature from params to header
+            payloadSignature = self.safe_string(params, 'payloadSignature')
+            cleanParams = self.omit(params, ['payloadSignature'])
+            headers = {'Content-Type': 'application/json'}
+            if payloadSignature is not None:
+                headers['payloadSignature'] = payloadSignature
+            if method == 'GET':
+                if cleanParams:
+                    url += '?' + self.urlencode(cleanParams)
+            else:
+                body = self.json(cleanParams)
         else:
-            # Private endpoints — attach JWT bearer token
-            # TODO: call getAccessToken()(which may trigger
-            #       authenticate() or refreshAccessToken())
-            #
-            # token = self.get_access_token()
-            headers = {
-                'Content-Type': 'application/json',
-                # 'Authorization': 'Bearer ' + token,
-            }
+            # Private endpoints(account, trade): attach JWT bearer token
+            token = self.safe_string(self.options, 'accessToken')
+            headers = {'Content-Type': 'application/json'}
+            if token is not None:
+                headers['Authorization'] = 'Bearer ' + token
             if method == 'GET':
                 if params:
                     url += '?' + self.urlencode(params)
@@ -612,50 +1188,7 @@ class bluefin(Exchange, ImplicitAPI):
                 body = self.json(params)
         return {'url': url, 'method': method, 'body': body, 'headers': headers}
 
-    def authenticate(self, params={}) -> dict:
-        # TODO: Ed25519 login flow
-        #
-        #  1. Build LoginRequest:
-        #     {userAddress, audience: 'bluefin', timestamp}
-        #  2. Serialise and sign with Ed25519(self.privateKey)
-        #     to produce a Sui personalMessage signature
-        #  3. POST to authPostAuthV2Token with:
-        #     {token: base64Signature, userAddress, audience, timestamp}
-        #  4. Store response: self.accessToken, self.refreshToken,
-        #     self.accessTokenExpiry, self.refreshTokenExpiry
-        #  5. Return {accessToken, refreshToken}
-        #
-        raise Error('authenticate not implemented')
-
-    def refresh_access_token(self, params={}) -> dict:
-        # TODO: call authPutAuthTokenRefresh with
-        #       {refreshToken: self.refreshToken}
-        #       Update stored tokens + expiry times
-        raise Error('refreshAccessToken not implemented')
-
-    def get_access_token(self) -> str:
-        # TODO:
-        #  - If no access token → call authenticate()
-        #  - If access token near expiry(< 60s) → call refreshAccessToken()
-        #  - Return self.accessToken
-        raise Error('getAccessToken not implemented')
-
-    def sign_request(self, fields: dict) -> dict:
-        # TODO: Ed25519 personal message signing for trade operations.
-        #
-        #  Used by createOrder, cancelOrder, setLeverage, withdraw, etc.
-        #
-        #  1. Deterministically serialise `fields`(sorted keys, specific
-        #     Bluefin encoding — see SDK source)
-        #  2. Sign with Ed25519 self.privateKey
-        #  3. Return {...fields, signature: base64Signature, signer: walletAddress}
-        #
-        raise Error('signRequest not implemented')
-
     def parse_e9(self, value: Str) -> Str:
-        # Bluefin stores prices/quantities strings
-        # scaled by 1e9. Shift the decimal point 9 places right
-        # via Precise — no floating-point arithmetic involved.
         if value is None:
             return None
         precise = Precise(value)
@@ -664,8 +1197,6 @@ class bluefin(Exchange, ImplicitAPI):
         return str(precise)
 
     def to_e9(self, value: Str) -> Str:
-        # Reverse of parseE9: shift decimal 9 places left to
-        # produce Bluefin's scaled-integer string.
         if value is None:
             return None
         precise = Precise(value)
@@ -673,10 +1204,8 @@ class bluefin(Exchange, ImplicitAPI):
         precise.reduce()
         return str(precise)
 
-    def convert_e9_levels(self, levels: List[Any]) -> List[List[Any]]:
-        # Convert [[priceE9, qtyE9], ...] to [[price, qty], ...]
-        # pairs for lossless order book construction.
-        result: List[Any][] = []
+    def convert_e9_levels(self, levels):
+        result = []
         for i in range(0, len(levels)):
             level = levels[i]
             result.append([

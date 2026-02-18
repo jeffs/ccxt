@@ -1,0 +1,25 @@
+from ccxt.base.types import Entry
+
+
+class ImplicitAPI:
+    exchange_get_v1_exchange_info = exchangeGetV1ExchangeInfo = Entry('v1/exchange/info', 'exchange', 'GET', {})
+    exchange_get_v1_exchange_depth = exchangeGetV1ExchangeDepth = Entry('v1/exchange/depth', 'exchange', 'GET', {})
+    exchange_get_v1_exchange_ticker = exchangeGetV1ExchangeTicker = Entry('v1/exchange/ticker', 'exchange', 'GET', {})
+    exchange_get_v1_exchange_tickers = exchangeGetV1ExchangeTickers = Entry('v1/exchange/tickers', 'exchange', 'GET', {})
+    exchange_get_v1_exchange_trades = exchangeGetV1ExchangeTrades = Entry('v1/exchange/trades', 'exchange', 'GET', {})
+    exchange_get_v1_exchange_candlesticks = exchangeGetV1ExchangeCandlesticks = Entry('v1/exchange/candlesticks', 'exchange', 'GET', {})
+    exchange_get_v1_exchange_fundingratehistory = exchangeGetV1ExchangeFundingRateHistory = Entry('v1/exchange/fundingRateHistory', 'exchange', 'GET', {})
+    auth_post_auth_token = authPostAuthToken = Entry('auth/token', 'auth', 'POST', {})
+    auth_post_auth_v2_token = authPostAuthV2Token = Entry('auth/v2/token', 'auth', 'POST', {})
+    auth_put_auth_token_refresh = authPutAuthTokenRefresh = Entry('auth/token/refresh', 'auth', 'PUT', {})
+    account_get_api_v1_account = accountGetApiV1Account = Entry('api/v1/account', 'account', 'GET', {})
+    account_get_api_v1_account_trades = accountGetApiV1AccountTrades = Entry('api/v1/account/trades', 'account', 'GET', {})
+    account_get_api_v1_account_transactions = accountGetApiV1AccountTransactions = Entry('api/v1/account/transactions', 'account', 'GET', {})
+    account_get_api_v1_account_fundingratehistory = accountGetApiV1AccountFundingRateHistory = Entry('api/v1/account/fundingRateHistory', 'account', 'GET', {})
+    trade_get_api_v1_trade_openorders = tradeGetApiV1TradeOpenOrders = Entry('api/v1/trade/openOrders', 'trade', 'GET', {})
+    trade_get_api_v1_trade_standbyorders = tradeGetApiV1TradeStandbyOrders = Entry('api/v1/trade/standbyOrders', 'trade', 'GET', {})
+    trade_post_api_v1_trade_orders = tradePostApiV1TradeOrders = Entry('api/v1/trade/orders', 'trade', 'POST', {})
+    trade_post_api_v1_trade_withdraw = tradePostApiV1TradeWithdraw = Entry('api/v1/trade/withdraw', 'trade', 'POST', {})
+    trade_put_api_v1_trade_orders_cancel = tradePutApiV1TradeOrdersCancel = Entry('api/v1/trade/orders/cancel', 'trade', 'PUT', {})
+    trade_put_api_v1_trade_leverage = tradePutApiV1TradeLeverage = Entry('api/v1/trade/leverage', 'trade', 'PUT', {})
+    trade_put_api_v1_trade_adjustisolatedmargin = tradePutApiV1TradeAdjustIsolatedMargin = Entry('api/v1/trade/adjustIsolatedMargin', 'trade', 'PUT', {})
