@@ -7,6 +7,9 @@ namespace ccxt\async;
 
 use Exception; // a common import
 use ccxt\async\abstract\bluefin as Exchange;
+use ccxt\AuthenticationError;
+use ccxt\ArgumentsRequired;
+use ccxt\OrderNotFound;
 use ccxt\Precise;
 use \React\Async;
 use \React\Promise\PromiseInterface;
@@ -41,11 +44,14 @@ class bluefin extends Exchange {
                 'cancelOrders' => true,
                 'createOrder' => true,
                 'fetchBalance' => true,
+                'fetchClosedOrders' => true,
                 'fetchFundingRateHistory' => true,
+                'fetchLeverageTiers' => true,
                 'fetchMarkets' => true,
                 'fetchMyTrades' => true,
                 'fetchOHLCV' => true,
                 'fetchOpenOrders' => true,
+                'fetchOrder' => true,
                 'fetchOrderBook' => true,
                 'fetchPositions' => true,
                 'fetchTicker' => true,
@@ -120,11 +126,13 @@ class bluefin extends Exchange {
                         'api/v1/account/trades',
                         'api/v1/account/transactions',
                         'api/v1/account/fundingRateHistory',
-                        'api/v1/trade/openOrders',
-                        'api/v1/trade/standbyOrders',
                     ),
                 ),
                 'trade' => array(
+                    'get' => array(
+                        'api/v1/trade/openOrders',
+                        'api/v1/trade/standbyOrders',
+                    ),
                     'post' => array(
                         'api/v1/trade/orders',
                         'api/v1/trade/withdraw',
@@ -150,10 +158,175 @@ class bluefin extends Exchange {
         ));
     }
 
+    public function bcs_serialize_bytes(mixed $data): mixed {
+        // BCS encoding for a $byte vector => ULEB128 length prefix followed by raw bytes
+        $remaining = count($data);
+        $result = $this->base16_to_binary('');
+        while ($remaining >= 0x80) {
+            $byte = ($remaining & 0x7f) | 0x80;
+            $result = $this->binary_concat($result, $this->number_to_be($byte, 1));
+            $remaining >>= 7;
+        }
+        $result = $this->binary_concat($result, $this->number_to_be($remaining, 1));
+        return $this->binary_concat($result, $data);
+    }
+
+    public function sui_sign_personal_message(mixed $message, string $privateKeyHex): string {
+        $bcsMsg = $this->bcs_serialize_bytes($message);
+        $intentPrefix = $this->base16_to_binary('030000');
+        $intentMsg = $this->binary_concat($intentPrefix, $bcsMsg);
+        $digest = $this->hash($intentMsg, 'blake2b256', 'binary');
+        $keyBytes = $this->base16_to_binary(str_replace('0x', '', $privateKeyHex));
+        $sig = base64_decode(eddsa ($digest, $keyBytes, 'ed25519'));
+        $pubkey = $this->eddsa_public_key($keyBytes, 'ed25519');
+        $flagByte = $this->base16_to_binary('00');
+        $envelope = $this->binary_concat($flagByte, $sig, $pubkey);
+        return $this->binary_to_base64($envelope);
+    }
+
+    public function json_pretty_print(array $data): string {
+        // Pretty-printed JSON with 2-space indent, matching Bluefin SDK's toJson()
+        $keys = is_array($data) ? array_keys($data) : array();
+        $lines => stringarray() = array( '{' );
+        for ($i = 0; $i < count($keys); $i++) {
+            $key = $keys[$i];
+            $value = $data[$key];
+            $valueStr = null;
+            if (gettype($value) === 'string') {
+                $valueStr = '"' . $value . '"';
+            } elseif (is_bool($value)) {
+                $valueStr = $value ? 'true' : 'false';
+            } else array(
+                $valueStr = (string) $value;
+            }
+            $comma = ($i < strlen($keys) - 1) ? ',' : '';
+            $lines[] = '  "' . $key . '" => ' . $valueStr . $comma;
+        }
+        $lines[] = ')';
+        return implode('\n', $lines);
+    }
+
+    public function sign_trade_request(array $payload): string {
+        $jsonStr = $this->json_pretty_print($payload);
+        return $this->sui_sign_personal_message($this->encode($jsonStr), $this->privateKey);
+    }
+
+    public function authenticate($params = array ()): PromiseInterface {
+        return Async\async(function () use ($params) {
+            $this->check_required_credentials();
+            $now = $this->milliseconds();
+            $loginRequest = array(
+                'accountAddress' => $this->walletAddress,
+                'signedAtMillis' => $now,
+                'audience' => 'api',
+            );
+            $loginJson = $this->json($loginRequest);
+            $signature = $this->sui_sign_personal_message($this->encode($loginJson), $this->privateKey);
+            $request = array(
+                'accountAddress' => $loginRequest['accountAddress'],
+                'signedAtMillis' => $loginRequest['signedAtMillis'],
+                'audience' => $loginRequest['audience'],
+                'payloadSignature' => $signature,
+            );
+            $response = Async\await($this->authPostAuthV2Token ($this->extend($request, $params)));
+            $accessToken = $this->safe_string($response, 'accessToken');
+            $refreshToken = $this->safe_string($response, 'refreshToken');
+            $accessValidFor = $this->safe_number($response, 'accessTokenValidForSeconds', 300);
+            $refreshValidFor = $this->safe_number($response, 'refreshTokenValidForSeconds', 2592000);
+            if ($accessToken === null) {
+                throw new AuthenticationError($this->id . ' authenticate() failed — no $accessToken in response');
+            }
+            $nowSeconds = $now / 1000;
+            $this->options['accessToken'] = $accessToken;
+            $this->options['refreshToken'] = $refreshToken;
+            $this->options['tokenSetAtSeconds'] = $nowSeconds;
+            $this->options['accessTokenValidForSeconds'] = $accessValidFor;
+            $this->options['refreshTokenValidForSeconds'] = $refreshValidFor;
+            return $response;
+        }) ();
+    }
+
+    public function refresh_access_token($params = array ()): PromiseInterface {
+        return Async\async(function () use ($params) {
+            $refreshToken = $this->safe_string($this->options, 'refreshToken');
+            if ($refreshToken === null) {
+                return Async\await($this->authenticate($params));
+            }
+            $request = array(
+                'refreshToken' => $refreshToken,
+            );
+            $response = Async\await($this->authPutAuthTokenRefresh ($this->extend($request, $params)));
+            $accessToken = $this->safe_string($response, 'accessToken');
+            $newRefreshToken = $this->safe_string($response, 'refreshToken');
+            $accessValidFor = $this->safe_number($response, 'accessTokenValidForSeconds', 300);
+            $refreshValidFor = $this->safe_number($response, 'refreshTokenValidForSeconds', 2592000);
+            if ($accessToken === null) {
+                throw new AuthenticationError($this->id . ' refreshAccessToken() failed — no $accessToken in response');
+            }
+            $nowSeconds = $this->milliseconds() / 1000;
+            $this->options['accessToken'] = $accessToken;
+            $this->options['refreshToken'] = $newRefreshToken;
+            $this->options['tokenSetAtSeconds'] = $nowSeconds;
+            $this->options['accessTokenValidForSeconds'] = $accessValidFor;
+            $this->options['refreshTokenValidForSeconds'] = $refreshValidFor;
+            return $response;
+        }) ();
+    }
+
+    public function is_access_token_expired(): bool {
+        $token = $this->safe_string($this->options, 'accessToken');
+        $tokenSetAt = $this->safe_number($this->options, 'tokenSetAtSeconds');
+        if ($token === null || $tokenSetAt === null) {
+            return true;
+        }
+        $lifetime = $this->safe_number($this->options, 'accessTokenValidForSeconds', 300);
+        $nowSeconds = $this->milliseconds() / 1000;
+        // Refresh at 80% of $lifetime (matching SDK)
+        return $nowSeconds >= ($tokenSetAt . $lifetime * 0.8);
+    }
+
+    public function is_refresh_token_valid(): bool {
+        $refreshToken = $this->safe_string($this->options, 'refreshToken');
+        $tokenSetAt = $this->safe_number($this->options, 'tokenSetAtSeconds');
+        if ($refreshToken === null || $tokenSetAt === null) {
+            return false;
+        }
+        $lifetime = $this->safe_number($this->options, 'refreshTokenValidForSeconds', 2592000);
+        $nowSeconds = $this->milliseconds() / 1000;
+        // 60 second safety buffer
+        return $nowSeconds < ($tokenSetAt . $lifetime - 60);
+    }
+
+    public function get_access_token(): PromiseInterface {
+        return Async\async(function ()  {
+            $token = $this->safe_string($this->options, 'accessToken');
+            if ($token === null) {
+                Async\await($this->authenticate());
+                return $this->options['accessToken'];
+            }
+            if ($this->is_access_token_expired()) {
+                if ($this->is_refresh_token_valid()) {
+                    Async\await($this->refresh_access_token());
+                } else {
+                    Async\await($this->authenticate());
+                }
+            }
+            return $this->options['accessToken'];
+        }) ();
+    }
+
+    public function generate_salt(): string {
+        return (string) $this->microseconds();
+    }
+
     public function fetch_markets($params = array ()): PromiseInterface {
         return Async\async(function () use ($params) {
             $response = Async\await($this->exchangeGetV1ExchangeInfo ($params));
             $markets = $this->safe_list($response, 'markets', array());
+            $contractsConfig = $this->safe_dict($response, 'contractsConfig');
+            if ($contractsConfig !== null) {
+                $this->options['contractsConfig'] = $contractsConfig;
+            }
             $result => Marketarray() = array();
             for ($i = 0; $i < count($markets); $i++) {
                 $result[] = $this->parse_market($markets[$i]);
@@ -237,12 +410,24 @@ class bluefin extends Exchange {
         return Async\async(function () use ($symbol, $timeframe, $since, $limit, $params) {
             Async\await($this->load_markets());
             $market = $this->market($symbol);
+            $price = $this->safe_string($params, 'price');
+            $params = $this->omit($params, 'price');
+            $typeMap = array( 'mark' => 'Market', 'index' => 'Oracle' );
+            $candleType = $this->safe_string($typeMap, $price, 'Last');
             $request = array(
                 'symbol' => $this->bluefin_symbol($symbol),
                 'interval' => $this->safe_string($this->timeframes, $timeframe, $timeframe),
+                'type' => $candleType,
             );
             if ($since !== null) {
-                $request['startTime'] = $since;
+                $request['startTimeAtMillis'] = $since;
+            } else {
+                // Bluefin paginates forward from the beginning of $market
+                // history when startTimeAtMillis is omitted. Compute a
+                // sensible default so callers get the most recent candles.
+                $effectiveLimit = ($limit !== null) ? $limit : 50;
+                $durationMs = $this->parse_timeframe($timeframe) * 1000;
+                $request['startTimeAtMillis'] = $this->milliseconds() - $effectiveLimit * $durationMs;
             }
             if ($limit !== null) {
                 $request['limit'] = $limit;
@@ -263,7 +448,7 @@ class bluefin extends Exchange {
                 $request['symbol'] = str_replace('/USDC:USDC', '-PERP', $symbol);
             }
             if ($since !== null) {
-                $request['startTime'] = $since;
+                $request['startTimeAtMillis'] = $since;
             }
             if ($limit !== null) {
                 $request['limit'] = $limit;
@@ -279,84 +464,479 @@ class bluefin extends Exchange {
 
     public function fetch_balance($params = array ()): PromiseInterface {
         return Async\async(function () use ($params) {
-            // TODO => call accountGetApiV1Account (needs JWT),
-            //       parse via parseBalance
-            //
-            // Async\await($this->load_markets());
-            // $response = Async\await($this->accountGetApiV1Account ($params));
-            // return $this->parse_balance($response);
-            throw new \Exception('fetchBalance not implemented');
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $response = Async\await($this->accountGetApiV1Account ($params));
+            return $this->parse_balance($response);
         }) ();
     }
 
     public function fetch_positions(?array $symbols = null, $params = array ()): PromiseInterface {
-        // TODO => call accountGetApiV1Account (needs JWT),
-        //       extract positions array, parse each via parsePosition
-        throw new \Exception('fetchPositions not implemented');
+        return Async\async(function () use ($symbols, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $response = Async\await($this->accountGetApiV1Account ($params));
+            $positions = $this->safe_list($response, 'positions', array());
+            $result => Positionarray() = array();
+            for ($i = 0; $i < count($positions); $i++) {
+                $position = $this->parse_position($positions[$i]);
+                if ($symbols !== null && !$this->in_array($position['symbol'], $symbols)) {
+                    continue;
+                }
+                $result[] = $position;
+            }
+            return $result;
+        }) ();
     }
 
     public function fetch_my_trades(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = array ()): PromiseInterface {
-        // TODO => call accountGetApiV1AccountTrades (needs JWT),
-        //       parse each via parseTrade
-        throw new \Exception('fetchMyTrades not implemented');
+        return Async\async(function () use ($symbol, $since, $limit, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $request = array();
+            if ($symbol !== null) {
+                $request['symbol'] = $this->bluefin_symbol($symbol);
+            }
+            if ($limit !== null) {
+                $request['limit'] = $limit;
+            }
+            $response = Async\await($this->accountGetApiV1AccountTrades ($this->extend($request, $params)));
+            $market = ($symbol !== null) ? $this->market($symbol) : null;
+            $result => Tradearray() = array();
+            $trades = (gettype($response) === 'array' && array_keys($response) === array_keys(array_keys($response))) ? $response : $this->safe_list($response, 'trades', array());
+            for ($i = 0; $i < count($trades); $i++) {
+                $result[] = $this->parse_trade($trades[$i], $market);
+            }
+            return $result;
+        }) ();
     }
 
     public function fetch_open_orders(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = array ()): PromiseInterface {
-        // TODO => call accountGetApiV1TradeOpenOrders (needs JWT),
-        //       parse each via parseOrder
-        throw new \Exception('fetchOpenOrders not implemented');
+        return Async\async(function () use ($symbol, $since, $limit, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $request = array();
+            if ($symbol !== null) {
+                $request['symbol'] = $this->bluefin_symbol($symbol);
+            }
+            $response = Async\await($this->tradeGetApiV1TradeOpenOrders ($this->extend($request, $params)));
+            $market = ($symbol !== null) ? $this->market($symbol) : null;
+            $orders = (gettype($response) === 'array' && array_keys($response) === array_keys(array_keys($response))) ? $response : $this->safe_list($response, 'orders', array());
+            $result => Orderarray() = array();
+            for ($i = 0; $i < count($orders); $i++) {
+                $result[] = $this->parse_order($orders[$i], $market);
+            }
+            return $result;
+        }) ();
+    }
+
+    public function fetch_order(string $id, ?string $symbol = null, $params = array ()): PromiseInterface {
+        return Async\async(function () use ($id, $symbol, $params) {
+            // Bluefin has no individual order lookup endpoint.
+            // Strategy => check $openOrders → $standbyOrders → reconstruct from $trades->
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $request = array();
+            $market = null;
+            if ($symbol !== null) {
+                $market = $this->market($symbol);
+                $request['symbol'] = $this->bluefin_symbol($symbol);
+            }
+            // 1. Search open orders
+            $openResponse = Async\await($this->tradeGetApiV1TradeOpenOrders ($this->extend($request, $params)));
+            $openOrders = (gettype($openResponse) === 'array' && array_keys($openResponse) === array_keys(array_keys($openResponse))) ? $openResponse : $this->safe_list($openResponse, 'orders', array());
+            for ($i = 0; $i < count($openOrders); $i++) {
+                if ($this->safe_string($openOrders[$i], 'orderHash') === $id) {
+                    return $this->parse_order($openOrders[$i], $market);
+                }
+            }
+            // 2. Search standby orders (conditional/trigger orders)
+            $standbyResponse = Async\await($this->tradeGetApiV1TradeStandbyOrders ($this->extend($request, $params)));
+            $standbyOrders = (gettype($standbyResponse) === 'array' && array_keys($standbyResponse) === array_keys(array_keys($standbyResponse))) ? $standbyResponse : $this->safe_list($standbyResponse, 'orders', array());
+            for ($i = 0; $i < count($standbyOrders); $i++) {
+                if ($this->safe_string($standbyOrders[$i], 'orderHash') === $id) {
+                    return $this->parse_order($standbyOrders[$i], $market);
+                }
+            }
+            // 3. Reconstruct from $trades (order was filled/closed)
+            $tradeRequest = array();
+            if ($symbol !== null) {
+                $tradeRequest['symbol'] = $this->bluefin_symbol($symbol);
+            }
+            $tradeResponse = Async\await($this->accountGetApiV1AccountTrades ($this->extend($tradeRequest, $params)));
+            $trades = (gettype($tradeResponse) === 'array' && array_keys($tradeResponse) === array_keys(array_keys($tradeResponse))) ? $tradeResponse : $this->safe_list($tradeResponse, 'trades', array());
+            $matchingTrades => Dictarray() = array();
+            for ($i = 0; $i < count($trades); $i++) {
+                if ($this->safe_string($trades[$i], 'orderHash') === $id) {
+                    $matchingTrades[] = $trades[$i];
+                }
+            }
+            if (strlen($matchingTrades) > 0) {
+                return $this->reconstruct_order_from_trades($id, $matchingTrades, $market);
+            }
+            throw new OrderNotFound($this->id . ' fetchOrder() order ' . $id . ' not found');
+        }) ();
+    }
+
+    public function fetch_closed_orders(?string $symbol = null, ?int $since = null, ?int $limit = null, $params = array ()): PromiseInterface {
+        return Async\async(function () use ($symbol, $since, $limit, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $request = array();
+            $market = null;
+            if ($symbol !== null) {
+                $market = $this->market($symbol);
+                $request['symbol'] = $this->bluefin_symbol($symbol);
+            }
+            if ($since !== null) {
+                $request['startTimeAtMillis'] = $since;
+            }
+            if ($limit !== null) {
+                $request['limit'] = $limit;
+            }
+            $response = Async\await($this->accountGetApiV1AccountTrades ($this->extend($request, $params)));
+            $trades = (gettype($response) === 'array' && array_keys($response) === array_keys(array_keys($response))) ? $response : $this->safe_list($response, 'trades', array());
+            // Group $trades by $orderHash
+            $grouped = array();
+            for ($i = 0; $i < count($trades); $i++) {
+                $orderHash = $this->safe_string($trades[$i], 'orderHash');
+                if ($orderHash === null) {
+                    continue;
+                }
+                if ($grouped[$orderHash] === null) {
+                    $grouped[$orderHash] = array();
+                }
+                $grouped[$orderHash][] = $trades[$i];
+            }
+            // Reconstruct one Order per unique $orderHash
+            $result => Orderarray() = array();
+            $orderHashes = is_array($grouped) ? array_keys($grouped) : array();
+            for ($i = 0; $i < count($orderHashes); $i++) {
+                $result[] = $this->reconstruct_order_from_trades($orderHashes[$i], $grouped[$orderHashes[$i]], $market);
+            }
+            return $result;
+        }) ();
+    }
+
+    public function reconstruct_order_from_trades(string $id, array $trades, ?array $market = null): array {
+        // Reconstruct a closed Order from its constituent trade fills.
+        // All $trades share the same orderHash, $side, $symbol->
+        $first = $trades[0];
+        $bluefinSym = $this->safe_string($first, 'symbol');
+        $symbol = ($bluefinSym !== null) ? $this->ccxt_symbol($bluefinSym) : null;
+        $side = $this->parse_order_side($this->safe_string($first, 'side'));
+        // Aggregate => total $filled qty, total $cost, total $fee, latest $timestamp
+        $filledE9 = '0';
+        $costE9 = '0';
+        $feeE9 = '0';
+        $lastTimestamp = 0;
+        for ($i = 0; $i < count($trades); $i++) {
+            $qtyStr = $this->safe_string($trades[$i], 'quantityE9', '0');
+            $costStr = $this->safe_string($trades[$i], 'quoteQuantityE9', '0');
+            $feeStr = $this->safe_string($trades[$i], 'tradingFeeE9', '0');
+            $filledE9 = Precise::string_add($filledE9, $qtyStr);
+            $costE9 = Precise::string_add($costE9, $costStr);
+            $feeE9 = Precise::string_add($feeE9, $feeStr);
+            $ts = $this->safe_integer($trades[$i], 'executedAtMillis', 0);
+            if ($ts > $lastTimestamp) {
+                $lastTimestamp = $ts;
+            }
+        }
+        $filled = $this->parse_e9($filledE9);
+        $cost = $this->parse_e9($costE9);
+        $fee = $this->parse_e9($feeE9);
+        // Average price = total $cost / total $filled qty
+        $average = ($filledE9 !== '0') ? Precise::string_div($costE9, $filledE9) : null;
+        $timestamp = $this->safe_integer($first, 'executedAtMillis');
+        return $this->safe_order(array(
+            'id' => $id,
+            'clientOrderId' => null,
+            'info' => $trades,
+            'timestamp' => $timestamp,
+            'datetime' => $this->iso8601($timestamp),
+            'lastTradeTimestamp' => $lastTimestamp,
+            'symbol' => $symbol,
+            'type' => null,
+            'timeInForce' => null,
+            'postOnly' => null,
+            'reduceOnly' => null,
+            'side' => $side,
+            'price' => null,
+            'amount' => null,
+            'filled' => $filled,
+            'remaining' => $this->parse_number('0'),
+            'cost' => $cost,
+            'average' => $average,
+            'status' => 'closed',
+            'fee' => array(
+                'cost' => $this->parse_number($fee),
+                'currency' => 'USDC',
+            ),
+            'trades' => null,
+        ), $market);
     }
 
     public function create_order(string $symbol, string $type, string $side, float $amount, ?float $price = null, $params = array ()): PromiseInterface {
-        // TODO:
-        //  1. loadMarkets, resolve market
-        //  2. Build signedFields:
-        //     { market, $price (E9), quantity (E9), leverage (E9),
-        //       $side => BUY/SELL, reduceOnly, salt, expiration, orderType }
-        //  3. Sign fields with Ed25519 via signRequest()
-        //  4. POST to tradePostApiV1TradeOrders with signed payload . JWT
-        //  5. Parse response via parseOrder
-        throw new \Exception('createOrder not implemented');
+        return Async\async(function () use ($symbol, $type, $side, $amount, $price, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $market = $this->market($symbol);
+            $contractsConfig = $this->safe_dict($this->options, 'contractsConfig', array());
+            $idsId = $this->safe_string($contractsConfig, 'idsId');
+            if ($idsId === null) {
+                throw new ArgumentsRequired($this->id . ' createOrder() requires $contractsConfig->idsId from fetchMarkets()');
+            }
+            $now = $this->milliseconds();
+            $leverage = $this->safe_string($params, 'leverage', '1');
+            $isIsolated = $this->safe_bool($params, 'isIsolated', false);
+            $reduceOnly = $this->safe_bool($params, 'reduceOnly', false);
+            $postOnly = $this->safe_bool($params, 'postOnly', false);
+            $timeInForce = $this->safe_string($params, 'timeInForce');
+            $clientOrderId = $this->safe_string($params, 'clientOrderId');
+            $bluefinSide = ($side === 'buy') ? 'LONG' : 'SHORT';
+            $priceStr = ($price !== null) ? $this->number_to_string($price) : '0';
+            $amountStr = $this->number_to_string($amount);
+            $priceE9 = $this->to_e9($priceStr);
+            $quantityE9 = $this->to_e9($amountStr);
+            $leverageE9 = $this->to_e9($leverage);
+            $salt = $this->generate_salt();
+            $expirationMs = $now + 86400000; // 24h
+            $expiration = (string) $expirationMs;
+            $signedAt = (string) $now;
+            $uiPayload = array(
+                'type' => 'Bluefin Pro Order',
+                'ids' => $idsId,
+                'account' => $this->walletAddress,
+                'market' => $market['id'],
+                'price' => $priceE9,
+                'quantity' => $quantityE9,
+                'leverage' => $leverageE9,
+                'side' => $bluefinSide,
+                'positionType' => $isIsolated ? 'ISOLATED' : 'CROSS',
+                'expiration' => $expiration,
+                'salt' => $salt,
+                'signedAt' => $signedAt,
+            );
+            $signature = $this->sign_trade_request($uiPayload);
+            $request = array(
+                'signedFields' => array(
+                    'symbol' => $market['id'],
+                    'accountAddress' => $this->walletAddress,
+                    'priceE9' => $priceE9,
+                    'quantityE9' => $quantityE9,
+                    'side' => $bluefinSide,
+                    'leverageE9' => $leverageE9,
+                    'isIsolated' => $isIsolated,
+                    'salt' => $salt,
+                    'idsId' => $idsId,
+                    'expiresAtMillis' => $this->parse_to_int($expiration),
+                    'signedAtMillis' => $now,
+                ),
+                'signature' => $signature,
+                'type' => strtoupper($type),
+                'reduceOnly' => $reduceOnly,
+            );
+            if ($postOnly) {
+                $request['postOnly'] = true;
+            }
+            if ($timeInForce !== null) {
+                $request['timeInForce'] = $timeInForce;
+            }
+            if ($clientOrderId !== null) {
+                $request['clientOrderId'] = $clientOrderId;
+            }
+            $cleanParams = $this->omit($params, array( 'leverage', 'isIsolated', 'reduceOnly', 'postOnly', 'timeInForce', 'clientOrderId' ));
+            $response = Async\await($this->tradePostApiV1TradeOrders ($this->extend($request, $cleanParams)));
+            return $this->parse_order($response, $market);
+        }) ();
     }
 
     public function cancel_order(string $id, ?string $symbol = null, $params = array ()): PromiseInterface {
-        // TODO => build cancel payload with orderId(s),
-        //       sign via signRequest, PUT to tradePutApiV1TradeOrdersCancel
-        throw new \Exception('cancelOrder not implemented');
+        return Async\async(function () use ($id, $symbol, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $request = array(
+                'orderHashes' => array( $id ),
+            );
+            if ($symbol !== null) {
+                $request['symbol'] = $this->bluefin_symbol($symbol);
+            }
+            $response = Async\await($this->tradePutApiV1TradeOrdersCancel ($this->extend($request, $params)));
+            return $this->safe_order(array(
+                'id' => $id,
+                'info' => $response,
+                'status' => 'canceled',
+            ));
+        }) ();
     }
 
     public function cancel_orders(array $ids, ?string $symbol = null, $params = array ()): PromiseInterface {
-        // TODO => batch cancel — same endpoint, multiple orderIds
-        throw new \Exception('cancelOrders not implemented');
+        return Async\async(function () use ($ids, $symbol, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $request = array(
+                'orderHashes' => $ids,
+            );
+            if ($symbol !== null) {
+                $request['symbol'] = $this->bluefin_symbol($symbol);
+            }
+            $response = Async\await($this->tradePutApiV1TradeOrdersCancel ($this->extend($request, $params)));
+            $cancelledHashes = $this->safe_list($response, 'orderHashes', $ids);
+            $result => Orderarray() = array();
+            for ($i = 0; $i < count($cancelledHashes); $i++) {
+                $result[] = $this->safe_order(array(
+                    'id' => $cancelledHashes[$i],
+                    'info' => $response,
+                    'status' => 'canceled',
+                ));
+            }
+            return $result;
+        }) ();
     }
 
     public function set_leverage(?int $leverage, ?string $symbol = null, $params = array ()): PromiseInterface {
-        // TODO => build payload array( $symbol, leverageE9 => toE9($leverage) ),
-        //       sign with signRequest, PUT to tradePutApiV1TradeLeverage
-        throw new \Exception('setLeverage not implemented');
+        return Async\async(function () use ($leverage, $symbol, $params) {
+            if ($symbol === null) {
+                throw new ArgumentsRequired($this->id . ' setLeverage() requires a $symbol argument');
+            }
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $market = $this->market($symbol);
+            $contractsConfig = $this->safe_dict($this->options, 'contractsConfig', array());
+            $idsId = $this->safe_string($contractsConfig, 'idsId');
+            if ($idsId === null) {
+                throw new ArgumentsRequired($this->id . ' setLeverage() requires $contractsConfig->idsId from fetchMarkets()');
+            }
+            $now = $this->milliseconds();
+            $leverageE9 = $this->to_e9($this->number_to_string($leverage));
+            $salt = $this->generate_salt();
+            $signedAt = (string) $now;
+            $uiPayload = array(
+                'type' => 'Bluefin Pro Leverage Adjustment',
+                'ids' => $idsId,
+                'account' => $this->walletAddress,
+                'market' => $market['id'],
+                'leverage' => $leverageE9,
+                'salt' => $salt,
+                'signedAt' => $signedAt,
+            );
+            $signature = $this->sign_trade_request($uiPayload);
+            $request = array(
+                'signedFields' => array(
+                    'accountAddress' => $this->walletAddress,
+                    'symbol' => $market['id'],
+                    'leverageE9' => $leverageE9,
+                    'salt' => $salt,
+                    'idsId' => $idsId,
+                    'signedAtMillis' => $now,
+                ),
+                'signature' => $signature,
+            );
+            return Async\await($this->tradePutApiV1TradeLeverage ($this->extend($request, $params)));
+        }) ();
     }
 
     public function set_margin_mode(string $marginMode, ?string $symbol = null, $params = array ()): PromiseInterface {
-        // TODO => Bluefin sets margin mode via the leverage endpoint
-        //       (isolated vs cross is a field on the leverage request)
-        throw new \Exception('setMarginMode not implemented');
+        // Bluefin sets margin $mode per-order via the isIsolated field.
+        // Store the preference so createOrder can use it.
+        $mode = strtolower($marginMode);
+        if ($mode !== 'isolated' && $mode !== 'cross') {
+            throw new ArgumentsRequired($this->id . ' setMarginMode() $marginMode must be "isolated" or "cross"');
+        }
+        $this->options['defaultMarginMode'] = $mode;
+        return array( 'info' => $mode );
     }
 
     public function add_margin(string $symbol, float $amount, $params = array ()): PromiseInterface {
-        // TODO => PUT to tradePutApiV1TradeAdjustIsolatedMargin
-        //       with positive $amount (E9)
-        throw new \Exception('addMargin not implemented');
+        return Async\async(function () use ($symbol, $amount, $params) {
+            return Async\await($this->adjust_margin($symbol, $amount, 'Add', $params));
+        }) ();
     }
 
     public function reduce_margin(string $symbol, float $amount, $params = array ()): PromiseInterface {
-        // TODO => PUT to tradePutApiV1TradeAdjustIsolatedMargin
-        //       with negative $amount (E9)
-        throw new \Exception('reduceMargin not implemented');
+        return Async\async(function () use ($symbol, $amount, $params) {
+            return Async\await($this->adjust_margin($symbol, $amount, 'Remove', $params));
+        }) ();
+    }
+
+    public function adjust_margin(string $symbol, float $amount, string $operation, $params = array ()): PromiseInterface {
+        return Async\async(function () use ($symbol, $amount, $operation, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $market = $this->market($symbol);
+            $contractsConfig = $this->safe_dict($this->options, 'contractsConfig', array());
+            $idsId = $this->safe_string($contractsConfig, 'idsId');
+            if ($idsId === null) {
+                throw new ArgumentsRequired($this->id . ' adjustMargin() requires $contractsConfig->idsId from fetchMarkets()');
+            }
+            $now = $this->milliseconds();
+            $quantityE9 = $this->to_e9($this->number_to_string($amount));
+            $salt = $this->generate_salt();
+            $signedAt = (string) $now;
+            $isAdd = ($operation === 'Add');
+            $uiPayload = array(
+                'type' => 'Bluefin Pro Margin Adjustment',
+                'ids' => $idsId,
+                'account' => $this->walletAddress,
+                'market' => $market['id'],
+                'add' => $isAdd,
+                'amount' => $quantityE9,
+                'salt' => $salt,
+                'signedAt' => $signedAt,
+            );
+            $signature = $this->sign_trade_request($uiPayload);
+            $request = array(
+                'signedFields' => array(
+                    'idsId' => $idsId,
+                    'accountAddress' => $this->walletAddress,
+                    'symbol' => $market['id'],
+                    'operation' => $operation,
+                    'quantityE9' => $quantityE9,
+                    'salt' => $salt,
+                    'signedAtMillis' => $now,
+                ),
+                'signature' => $signature,
+            );
+            return Async\await($this->tradePutApiV1TradeAdjustIsolatedMargin ($this->extend($request, $params)));
+        }) ();
     }
 
     public function withdraw(string $code, float $amount, string $address, ?string $tag = null, $params = array ()): PromiseInterface {
-        // TODO => POST to tradePostApiV1TradeWithdraw, signed
-        throw new \Exception('withdraw not implemented');
+        return Async\async(function () use ($code, $amount, $address, $tag, $params) {
+            Async\await($this->load_markets());
+            Async\await($this->get_access_token());
+            $contractsConfig = $this->safe_dict($this->options, 'contractsConfig', array());
+            $edsId = $this->safe_string($contractsConfig, 'edsId');
+            if ($edsId === null) {
+                throw new ArgumentsRequired($this->id . ' withdraw() requires $contractsConfig->edsId from fetchMarkets()');
+            }
+            $now = $this->milliseconds();
+            $amountE9 = $this->to_e9($this->number_to_string($amount));
+            $salt = $this->generate_salt();
+            $signedAt = (string) $now;
+            $uiPayload = array(
+                'type' => 'Bluefin Pro Withdrawal',
+                'eds' => $edsId,
+                'assetSymbol' => $code,
+                'account' => $this->walletAddress,
+                'amount' => $amountE9,
+                'salt' => $salt,
+                'signedAt' => $signedAt,
+            );
+            $signature = $this->sign_trade_request($uiPayload);
+            $request = array(
+                'signedFields' => array(
+                    'assetSymbol' => $code,
+                    'accountAddress' => $this->walletAddress,
+                    'amountE9' => $amountE9,
+                    'salt' => $salt,
+                    'edsId' => $edsId,
+                    'signedAtMillis' => $now,
+                ),
+                'signature' => $signature,
+            );
+            return Async\await($this->tradePostApiV1TradeWithdraw ($this->extend($request, $params)));
+        }) ();
     }
 
     public function parse_market(array $market): array {
@@ -385,23 +965,25 @@ class bluefin extends Exchange {
             'linear' => true,
             'inverse' => false,
             'active' => $status === 'ACTIVE',
+            'taker' => $this->parse_number($this->parse_e9($this->safe_string($market, 'defaultTakerFeeE9'))),
+            'maker' => $this->parse_number($this->parse_e9($this->safe_string($market, 'defaultMakerFeeE9'))),
             'contractSize' => $this->parse_number('1'),
             'precision' => array(
-                'price' => $this->parse_e9($this->safe_string($market, 'tickSizeE9')),
-                'amount' => $this->parse_e9($this->safe_string($market, 'stepSizeE9')),
+                'price' => $this->parse_number($this->parse_e9($this->safe_string($market, 'tickSizeE9'))),
+                'amount' => $this->parse_number($this->parse_e9($this->safe_string($market, 'stepSizeE9'))),
             ),
             'limits' => array(
                 'amount' => array(
-                    'min' => $this->parse_e9($this->safe_string($market, 'minOrderQuantityE9')),
-                    'max' => $this->parse_e9($this->safe_string($market, 'maxLimitOrderQuantityE9')),
+                    'min' => $this->parse_number($this->parse_e9($this->safe_string($market, 'minOrderQuantityE9'))),
+                    'max' => $this->parse_number($this->parse_e9($this->safe_string($market, 'maxLimitOrderQuantityE9'))),
                 ),
                 'price' => array(
-                    'min' => $this->parse_e9($this->safe_string($market, 'minOrderPriceE9')),
-                    'max' => $this->parse_e9($this->safe_string($market, 'maxOrderPriceE9')),
+                    'min' => $this->parse_number($this->parse_e9($this->safe_string($market, 'minOrderPriceE9'))),
+                    'max' => $this->parse_number($this->parse_e9($this->safe_string($market, 'maxOrderPriceE9'))),
                 ),
                 'leverage' => array(
                     'min' => $this->parse_number('1'),
-                    'max' => $this->parse_e9($this->safe_string($market, 'defaultLeverageE9')),
+                    'max' => $this->parse_number($this->parse_e9($this->safe_string($market, 'defaultLeverageE9'))),
                 ),
             ),
             'info' => $market,
@@ -465,20 +1047,31 @@ class bluefin extends Exchange {
         $cost = $this->parse_e9($this->safe_string($trade, 'quoteQuantityE9'));
         $side = $this->parse_order_side($this->safe_string($trade, 'side'));
         $timestamp = $this->safe_integer($trade, 'executedAtMillis');
+        $orderId = $this->safe_string($trade, 'orderHash');
+        $takerOrMaker = $this->safe_string_lower($trade, 'makerTaker');
+        // Private trades include $fee info
+        $fee = null;
+        $feeE9 = $this->safe_string($trade, 'tradingFeeE9');
+        if ($feeE9 !== null) {
+            $fee = array(
+                'cost' => $this->parse_number($this->parse_e9($feeE9)),
+                'currency' => 'USDC',
+            );
+        }
         return $this->safe_trade(array(
             'id' => $id,
             'info' => $trade,
             'timestamp' => $timestamp,
             'datetime' => $this->iso8601($timestamp),
             'symbol' => $symbol,
-            'order' => null,
+            'order' => $orderId,
             'type' => null,
             'side' => $side,
-            'takerOrMaker' => null,
+            'takerOrMaker' => $takerOrMaker,
             'price' => $price,
             'amount' => $amount,
             'cost' => $cost,
-            'fee' => null,
+            'fee' => $fee,
         ), $market);
     }
 
@@ -527,20 +1120,18 @@ class bluefin extends Exchange {
         $symbol = ($bluefinSym !== null) ? $this->ccxt_symbol($bluefinSym) : null;
         $rawSide = $this->safe_string($position, 'side');
         $side = ($rawSide !== null) ? strtolower($rawSide) : null;
-        $contracts = $this->parse_e9($this->safe_string($position, 'sizeE9'));
-        $entryPrice = $this->parse_e9($this->safe_string($position, 'avgEntryPriceE9'));
-        $markPrice = $this->parse_e9($this->safe_string($position, 'markPriceE9'));
-        $liquidationPrice = $this->parse_e9($this->safe_string($position, 'liquidationPriceE9'));
-        $notional = $this->parse_e9($this->safe_string($position, 'notionalValueE9'));
-        $unrealizedPnl = $this->parse_e9($this->safe_string($position, 'unrealizedPnlE9'));
-        $initialMargin = $this->parse_e9($this->safe_string($position, 'marginRequiredE9'));
-        $maintenanceMargin = $this->parse_e9($this->safe_string($position, 'maintenanceMarginE9'));
-        $leverage = $this->parse_e9($this->safe_string($position, 'clientSetLeverageE9'));
+        $contracts = $this->parse_number($this->parse_e9($this->safe_string($position, 'sizeE9')));
+        $entryPrice = $this->parse_number($this->parse_e9($this->safe_string($position, 'avgEntryPriceE9')));
+        $markPrice = $this->parse_number($this->parse_e9($this->safe_string($position, 'markPriceE9')));
+        $liquidationPrice = $this->parse_number($this->parse_e9($this->safe_string($position, 'liquidationPriceE9')));
+        $notional = $this->parse_number($this->parse_e9($this->safe_string($position, 'notionalValueE9')));
+        $unrealizedPnl = $this->parse_number($this->parse_e9($this->safe_string($position, 'unrealizedPnlE9')));
+        $initialMargin = $this->parse_number($this->parse_e9($this->safe_string($position, 'marginRequiredE9')));
+        $maintenanceMargin = $this->parse_number($this->parse_e9($this->safe_string($position, 'maintenanceMarginE9')));
+        $leverage = $this->parse_number($this->parse_e9($this->safe_string($position, 'clientSetLeverageE9')));
         $isIsolated = $this->safe_bool($position, 'isIsolated');
         $marginMode = $isIsolated ? 'isolated' : 'cross';
-        $collateral = $isIsolated
-            ? $this->parse_e9($this->safe_string($position, 'isolatedMarginE9'))
-            : $initialMargin;
+        $collateral = $isIsolated ? $this->parse_number($this->parse_e9($this->safe_string($position, 'isolatedMarginE9'))) : $initialMargin;
         $timestamp = $this->safe_integer($position, 'updatedAtMillis');
         return $this->safe_position(array(
             'id' => null,
@@ -590,13 +1181,14 @@ class bluefin extends Exchange {
         // Bluefin returns candlesticks of strings:
         //   [startTime, open, high, low, close, volume,
         //    endTime, quoteVolume, tradeCount]
+        // Price and volume values are in E9 format (multiply by 1e-9).
         return array(
             $this->safe_integer($ohlcv, 0),
-            $this->safe_number($ohlcv, 1),
-            $this->safe_number($ohlcv, 2),
-            $this->safe_number($ohlcv, 3),
-            $this->safe_number($ohlcv, 4),
-            $this->safe_number($ohlcv, 5),
+            $this->parse_number($this->parse_e9($this->safe_string($ohlcv, 1))),
+            $this->parse_number($this->parse_e9($this->safe_string($ohlcv, 2))),
+            $this->parse_number($this->parse_e9($this->safe_string($ohlcv, 3))),
+            $this->parse_number($this->parse_e9($this->safe_string($ohlcv, 4))),
+            $this->parse_number($this->parse_e9($this->safe_string($ohlcv, 5))),
         );
     }
 
@@ -642,93 +1234,122 @@ class bluefin extends Exchange {
         return $this->safe_string($sides, $side, $side);
     }
 
-    public function sign(string $path, $api = 'public', $method = 'GET', array $params = array (), mixed $headers = null, mixed $body = null): array {
-        return Async\async(function () use ($path, $api, $method, $params, $headers, $body) {
-            //
-            // CCXT calls this for every HTTP request.  We attach auth $headers
-            // only for private API groups (account, trade).
-            //
-            $url = $this->urls['api'][$api] . '/' . $path;
-            if ($api === 'exchange' || $api === 'auth') {
-                // Public endpoints — no auth header
-                if ($method === 'GET') {
-                    if ($params) {
-                        $url .= '?' . $this->urlencode($params);
-                    }
-                } else {
-                    $headers = array( 'Content-Type' => 'application/json' );
-                    $body = $this->json($params);
+    public function fetch_leverage_tiers(?array $symbols = null, $params = array ()): PromiseInterface {
+        return Async\async(function () use ($symbols, $params) {
+            Async\await($this->load_markets());
+            $symbols = $this->market_symbols($symbols);
+            $result => LeverageTiers = array();
+            $marketIds = is_array($this->markets) ? array_keys($this->markets) : array();
+            for ($i = 0; $i < count($marketIds); $i++) {
+                $market = $this->markets[$marketIds[$i]];
+                if (!$market['swap']) {
+                    continue;
                 }
-            } else {
-                // Private endpoints — attach JWT bearer $token
-                // TODO => call getAccessToken() (which may trigger
-                //       authenticate() or refreshAccessToken())
-                //
-                // $token = Async\await($this->get_access_token());
-                $headers = array(
-                    'Content-Type' => 'application/json',
-                    // 'Authorization' => 'Bearer ' . $token,
-                );
-                if ($method === 'GET') {
-                    if ($params) {
-                        $url .= '?' . $this->urlencode($params);
-                    }
-                } else {
-                    $body = $this->json($params);
+                $symbol = $market['symbol'];
+                if ($symbols !== null && !$this->in_array($symbol, $symbols)) {
+                    continue;
+                }
+                $tiers = $this->parse_market_leverage_tiers($market['info'], $market);
+                if (strlen($tiers) > 0) {
+                    $result[$symbol] = $tiers;
                 }
             }
-            return array( 'url' => $url, 'method' => $method, 'body' => $body, 'headers' => $headers );
+            return $result;
         }) ();
     }
 
-    public function authenticate($params = array ()): PromiseInterface {
-        // TODO => Ed25519 login flow
-        //
-        //  1. Build LoginRequest:
-        //     array( userAddress, audience => 'bluefin', timestamp )
-        //  2. Serialise and sign with Ed25519 ($this->privateKey)
-        //     to produce a Sui personalMessage signature
-        //  3. POST to authPostAuthV2Token with:
-        //     array( token => base64Signature, userAddress, audience, timestamp )
-        //  4. Store response => $this->accessToken, $this->refreshToken,
-        //     $this->accessTokenExpiry, $this->refreshTokenExpiry
-        //  5. Return array( accessToken, refreshToken )
-        //
-        throw new \Exception('authenticate not implemented');
+    public function parse_market_leverage_tiers(array $info, ?array $market = null): array {
+        // $maxNotionalAtOpenE9 is an array where index $i = max open notional
+        // at leverage ($i+1)x. Higher leverage → lower max notional.
+        // CCXT convention => $tiers are sorted by ascending notional range,
+        // each tier specifying the max leverage allowed at that notional bracket.
+        // So we invert => highest leverage (last valid entry) → lowest notional → tier 1.
+        $maxNotionalAtOpenE9 = $this->safe_list($info, 'maxNotionalAtOpenE9', array());
+        $maintenanceMarginRatioE9 = $this->safe_string($info, 'maintenanceMarginRatioE9');
+        $mmr = ($maintenanceMarginRatioE9 !== null) ? $this->parse_number($this->parse_e9($maintenanceMarginRatioE9)) : null;
+        // Collect valid (leverage, $maxNotional) pairs, filter zeros
+        $validPairs => Dictarray() = array();
+        for ($i = 0; $i < count($maxNotionalAtOpenE9); $i++) {
+            $idx = strlen($maxNotionalAtOpenE9) - 1 - $i;
+            $maxNotionalStr = $this->safe_string($maxNotionalAtOpenE9, $idx);
+            if ($maxNotionalStr === null || $maxNotionalStr === '0') {
+                continue;
+            }
+            $maxNotional = $this->parse_number($this->parse_e9($maxNotionalStr));
+            $validPairs[] = array(
+                'leverage' => $idx + 1,
+                'maxNotional' => $maxNotional,
+                'maxNotionalE9' => $maxNotionalStr,
+            );
+        }
+        // $validPairs is now highest-leverage-first (smallest notional first) — exactly what we need
+        $tiers = array();
+        for ($i = 0; $i < count($validPairs); $i++) {
+            $pair = $validPairs[$i];
+            $minNotional = ($i === 0) ? 0 : $validPairs[$i - 1]['maxNotional'];
+            $tierSymbol = ($market !== null) ? $market['symbol'] : null;
+            $tiers[] = array(
+                'tier' => $i + 1,
+                'symbol' => $tierSymbol,
+                'currency' => 'USDC',
+                'minNotional' => $minNotional,
+                'maxNotional' => $pair['maxNotional'],
+                'maintenanceMarginRate' => $mmr,
+                'maxLeverage' => $pair['leverage'],
+                'info' => array(
+                    'maxNotionalE9' => $pair['maxNotionalE9'],
+                    'leverage' => $pair['leverage'],
+                ),
+            );
+        }
+        return $tiers;
     }
 
-    public function refresh_access_token($params = array ()): PromiseInterface {
-        // TODO => call authPutAuthTokenRefresh with
-        //       array( refreshToken => $this->refreshToken )
-        //       Update stored tokens . expiry times
-        throw new \Exception('refreshAccessToken not implemented');
-    }
-
-    public function get_access_token(): PromiseInterface {
-        // TODO:
-        //  - If no access token → call authenticate()
-        //  - If access token near expiry (< 60s) → call refreshAccessToken()
-        //  - Return $this->accessToken
-        throw new \Exception('getAccessToken not implemented');
-    }
-
-    public function sign_request(array $fields): array {
-        // TODO => Ed25519 personal message signing for trade operations.
-        //
-        //  Used by createOrder, cancelOrder, setLeverage, withdraw, etc.
-        //
-        //  1. Deterministically serialise `$fields` (sorted keys, specific
-        //     Bluefin encoding — see SDK source)
-        //  2. Sign with Ed25519 $this->privateKey
-        //  3. Return array( ...fields, signature => base64Signature, signer => walletAddress )
-        //
-        throw new \Exception('signRequest not implemented');
+    public function sign(string $path, $api = 'public', $method = 'GET', array $params = array (), mixed $headers = null, mixed $body = null): array {
+        $url = $this->urls['api'][$api] . '/' . $path;
+        if ($api === 'exchange') {
+            if ($method === 'GET') {
+                if ($params) {
+                    $url .= '?' . $this->urlencode($params);
+                }
+            } else {
+                $headers = array( 'Content-Type' => 'application/json' );
+                $body = $this->json($params);
+            }
+        } elseif ($api === 'auth') {
+            // Auth endpoints => route $payloadSignature from $params to header
+            $payloadSignature = $this->safe_string($params, 'payloadSignature');
+            $cleanParams = $this->omit($params, array( 'payloadSignature' ));
+            $headers = array( 'Content-Type' => 'application/json' );
+            if ($payloadSignature !== null) {
+                $headers['payloadSignature'] = $payloadSignature;
+            }
+            if ($method === 'GET') {
+                if ($cleanParams) {
+                    $url .= '?' . $this->urlencode($cleanParams);
+                }
+            } else {
+                $body = $this->json($cleanParams);
+            }
+        } else {
+            // Private endpoints (account, trade) => attach JWT bearer $token
+            $token = $this->safe_string($this->options, 'accessToken');
+            $headers = array( 'Content-Type' => 'application/json' );
+            if ($token !== null) {
+                $headers['Authorization'] = 'Bearer ' . $token;
+            }
+            if ($method === 'GET') {
+                if ($params) {
+                    $url .= '?' . $this->urlencode($params);
+                }
+            } else {
+                $body = $this->json($params);
+            }
+        }
+        return array( 'url' => $url, 'method' => $method, 'body' => $body, 'headers' => $headers );
     }
 
     public function parse_e9(?string $value): ?string {
-        // Bluefin stores prices/quantities strings
-        // scaled by 1e9. Shift the decimal point 9 places right
-        // via Precise — no floating-point arithmetic involved.
         if ($value === null) {
             return null;
         }
@@ -739,8 +1360,6 @@ class bluefin extends Exchange {
     }
 
     public function to_e9(?string $value): ?string {
-        // Reverse of parseE9 => shift decimal 9 places left to
-        // produce Bluefin's scaled-integer string.
         if ($value === null) {
             return null;
         }
@@ -750,10 +1369,8 @@ class bluefin extends Exchange {
         return (string) $precise;
     }
 
-    public function convert_e9_levels(array $levels): array {
-        // Convert [[priceE9, qtyE9], ...] to [[price, qty], ...]
-        // pairs for lossless order book construction.
-        $result => anyarray()[] = array();
+    public function convert_e9_levels($levels) {
+        $result = array();
         for ($i = 0; $i < count($levels); $i++) {
             $level = $levels[$i];
             $result[] = array(

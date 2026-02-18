@@ -401,7 +401,14 @@ export default class bluefin extends Exchange {
             'type': candleType,
         };
         if (since !== undefined) {
-            request['startTime'] = since;
+            request['startTimeAtMillis'] = since;
+        } else {
+            // Bluefin paginates forward from the beginning of market
+            // history when startTimeAtMillis is omitted. Compute a
+            // sensible default so callers get the most recent candles.
+            const effectiveLimit = (limit !== undefined) ? limit : 50;
+            const durationMs = this.parseTimeframe (timeframe) * 1000;
+            request['startTimeAtMillis'] = this.milliseconds () - effectiveLimit * durationMs;
         }
         if (limit !== undefined) {
             request['limit'] = limit;
@@ -420,7 +427,7 @@ export default class bluefin extends Exchange {
             request['symbol'] = symbol.replace ('/USDC:USDC', '-PERP');
         }
         if (since !== undefined) {
-            request['startTime'] = since;
+            request['startTimeAtMillis'] = since;
         }
         if (limit !== undefined) {
             request['limit'] = limit;
@@ -908,6 +915,8 @@ export default class bluefin extends Exchange {
             'linear': true,
             'inverse': false,
             'active': status === 'ACTIVE',
+            'taker': this.parseNumber (this.parseE9 (this.safeString (market, 'defaultTakerFeeE9'))),
+            'maker': this.parseNumber (this.parseE9 (this.safeString (market, 'defaultMakerFeeE9'))),
             'contractSize': this.parseNumber ('1'),
             'precision': {
                 'price': this.parseNumber (this.parseE9 (this.safeString (market, 'tickSizeE9'))),
@@ -1061,18 +1070,18 @@ export default class bluefin extends Exchange {
         const symbol = (bluefinSym !== undefined) ? this.ccxtSymbol (bluefinSym) : undefined;
         const rawSide = this.safeString (position, 'side');
         const side = (rawSide !== undefined) ? rawSide.toLowerCase () : undefined;
-        const contracts = this.parseE9 (this.safeString (position, 'sizeE9'));
-        const entryPrice = this.parseE9 (this.safeString (position, 'avgEntryPriceE9'));
-        const markPrice = this.parseE9 (this.safeString (position, 'markPriceE9'));
-        const liquidationPrice = this.parseE9 (this.safeString (position, 'liquidationPriceE9'));
-        const notional = this.parseE9 (this.safeString (position, 'notionalValueE9'));
-        const unrealizedPnl = this.parseE9 (this.safeString (position, 'unrealizedPnlE9'));
-        const initialMargin = this.parseE9 (this.safeString (position, 'marginRequiredE9'));
-        const maintenanceMargin = this.parseE9 (this.safeString (position, 'maintenanceMarginE9'));
-        const leverage = this.parseE9 (this.safeString (position, 'clientSetLeverageE9'));
+        const contracts = this.parseNumber (this.parseE9 (this.safeString (position, 'sizeE9')));
+        const entryPrice = this.parseNumber (this.parseE9 (this.safeString (position, 'avgEntryPriceE9')));
+        const markPrice = this.parseNumber (this.parseE9 (this.safeString (position, 'markPriceE9')));
+        const liquidationPrice = this.parseNumber (this.parseE9 (this.safeString (position, 'liquidationPriceE9')));
+        const notional = this.parseNumber (this.parseE9 (this.safeString (position, 'notionalValueE9')));
+        const unrealizedPnl = this.parseNumber (this.parseE9 (this.safeString (position, 'unrealizedPnlE9')));
+        const initialMargin = this.parseNumber (this.parseE9 (this.safeString (position, 'marginRequiredE9')));
+        const maintenanceMargin = this.parseNumber (this.parseE9 (this.safeString (position, 'maintenanceMarginE9')));
+        const leverage = this.parseNumber (this.parseE9 (this.safeString (position, 'clientSetLeverageE9')));
         const isIsolated = this.safeBool (position, 'isIsolated');
         const marginMode = isIsolated ? 'isolated' : 'cross';
-        const collateral = isIsolated ? this.parseE9 (this.safeString (position, 'isolatedMarginE9')) : initialMargin;
+        const collateral = isIsolated ? this.parseNumber (this.parseE9 (this.safeString (position, 'isolatedMarginE9'))) : initialMargin;
         const timestamp = this.safeInteger (position, 'updatedAtMillis');
         return this.safePosition ({
             'id': undefined,
@@ -1122,13 +1131,14 @@ export default class bluefin extends Exchange {
         // Bluefin returns candlesticks as arrays of strings:
         //   [startTime, open, high, low, close, volume,
         //    endTime, quoteVolume, tradeCount]
+        // Price and volume values are in E9 format (multiply by 1e-9).
         return [
             this.safeInteger (ohlcv, 0),
-            this.safeNumber (ohlcv, 1),
-            this.safeNumber (ohlcv, 2),
-            this.safeNumber (ohlcv, 3),
-            this.safeNumber (ohlcv, 4),
-            this.safeNumber (ohlcv, 5),
+            this.parseNumber (this.parseE9 (this.safeString (ohlcv, 1))),
+            this.parseNumber (this.parseE9 (this.safeString (ohlcv, 2))),
+            this.parseNumber (this.parseE9 (this.safeString (ohlcv, 3))),
+            this.parseNumber (this.parseE9 (this.safeString (ohlcv, 4))),
+            this.parseNumber (this.parseE9 (this.safeString (ohlcv, 5))),
         ];
     }
 

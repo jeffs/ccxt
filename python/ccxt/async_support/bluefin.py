@@ -369,7 +369,14 @@ class bluefin(Exchange, ImplicitAPI):
             'type': candleType,
         }
         if since is not None:
-            request['startTime'] = since
+            request['startTimeAtMillis'] = since
+        else:
+            # Bluefin paginates forward from the beginning of market
+            # history when startTimeAtMillis is omitted. Compute a
+            # sensible default so callers get the most recent candles.
+            effectiveLimit = limit if (limit is not None) else 50
+            durationMs = self.parse_timeframe(timeframe) * 1000
+            request['startTimeAtMillis'] = self.milliseconds() - effectiveLimit * durationMs
         if limit is not None:
             request['limit'] = limit
         response = await self.exchangeGetV1ExchangeCandlesticks(self.extend(request, params))
@@ -383,7 +390,7 @@ class bluefin(Exchange, ImplicitAPI):
         if symbol is not None:
             request['symbol'] = symbol.replace('/USDC:USDC', '-PERP')
         if since is not None:
-            request['startTime'] = since
+            request['startTimeAtMillis'] = since
         if limit is not None:
             request['limit'] = limit
         response = await self.exchangeGetV1ExchangeFundingRateHistory(self.extend(request, params))
@@ -814,6 +821,8 @@ class bluefin(Exchange, ImplicitAPI):
             'linear': True,
             'inverse': False,
             'active': status == 'ACTIVE',
+            'taker': self.parse_number(self.parse_e9(self.safe_string(market, 'defaultTakerFeeE9'))),
+            'maker': self.parse_number(self.parse_e9(self.safe_string(market, 'defaultMakerFeeE9'))),
             'contractSize': self.parse_number('1'),
             'precision': {
                 'price': self.parse_number(self.parse_e9(self.safe_string(market, 'tickSizeE9'))),
@@ -962,18 +971,18 @@ class bluefin(Exchange, ImplicitAPI):
         symbol = self.ccxt_symbol(bluefinSym) if (bluefinSym is not None) else None
         rawSide = self.safe_string(position, 'side')
         side = rawSide.lower() if (rawSide is not None) else None
-        contracts = self.parse_e9(self.safe_string(position, 'sizeE9'))
-        entryPrice = self.parse_e9(self.safe_string(position, 'avgEntryPriceE9'))
-        markPrice = self.parse_e9(self.safe_string(position, 'markPriceE9'))
-        liquidationPrice = self.parse_e9(self.safe_string(position, 'liquidationPriceE9'))
-        notional = self.parse_e9(self.safe_string(position, 'notionalValueE9'))
-        unrealizedPnl = self.parse_e9(self.safe_string(position, 'unrealizedPnlE9'))
-        initialMargin = self.parse_e9(self.safe_string(position, 'marginRequiredE9'))
-        maintenanceMargin = self.parse_e9(self.safe_string(position, 'maintenanceMarginE9'))
-        leverage = self.parse_e9(self.safe_string(position, 'clientSetLeverageE9'))
+        contracts = self.parse_number(self.parse_e9(self.safe_string(position, 'sizeE9')))
+        entryPrice = self.parse_number(self.parse_e9(self.safe_string(position, 'avgEntryPriceE9')))
+        markPrice = self.parse_number(self.parse_e9(self.safe_string(position, 'markPriceE9')))
+        liquidationPrice = self.parse_number(self.parse_e9(self.safe_string(position, 'liquidationPriceE9')))
+        notional = self.parse_number(self.parse_e9(self.safe_string(position, 'notionalValueE9')))
+        unrealizedPnl = self.parse_number(self.parse_e9(self.safe_string(position, 'unrealizedPnlE9')))
+        initialMargin = self.parse_number(self.parse_e9(self.safe_string(position, 'marginRequiredE9')))
+        maintenanceMargin = self.parse_number(self.parse_e9(self.safe_string(position, 'maintenanceMarginE9')))
+        leverage = self.parse_number(self.parse_e9(self.safe_string(position, 'clientSetLeverageE9')))
         isIsolated = self.safe_bool(position, 'isIsolated')
         marginMode = 'isolated' if isIsolated else 'cross'
-        collateral = self.parse_e9(self.safe_string(position, 'isolatedMarginE9')) if isIsolated else initialMargin
+        collateral = self.parse_number(self.parse_e9(self.safe_string(position, 'isolatedMarginE9'))) if isIsolated else initialMargin
         timestamp = self.safe_integer(position, 'updatedAtMillis')
         return self.safe_position({
             'id': None,
@@ -1020,13 +1029,14 @@ class bluefin(Exchange, ImplicitAPI):
         # Bluefin returns candlesticks of strings:
         #   [startTime, open, high, low, close, volume,
         #    endTime, quoteVolume, tradeCount]
+        # Price and volume values are in E9 format(multiply by 1e-9).
         return [
             self.safe_integer(ohlcv, 0),
-            self.safe_number(ohlcv, 1),
-            self.safe_number(ohlcv, 2),
-            self.safe_number(ohlcv, 3),
-            self.safe_number(ohlcv, 4),
-            self.safe_number(ohlcv, 5),
+            self.parse_number(self.parse_e9(self.safe_string(ohlcv, 1))),
+            self.parse_number(self.parse_e9(self.safe_string(ohlcv, 2))),
+            self.parse_number(self.parse_e9(self.safe_string(ohlcv, 3))),
+            self.parse_number(self.parse_e9(self.safe_string(ohlcv, 4))),
+            self.parse_number(self.parse_e9(self.safe_string(ohlcv, 5))),
         ]
 
     def parse_funding_rate_history(self, entry: dict, market: Market = None) -> FundingRateHistory:
