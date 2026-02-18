@@ -7,8 +7,8 @@ import { TICK_SIZE } from './base/functions/number.js';
 import { ed25519 } from './static_dependencies/noble-curves/ed25519.js';
 import { blake2b } from './static_dependencies/noble-hashes/blake2b.js';
 import { concatBytes, utf8ToBytes } from './static_dependencies/noble-hashes/utils.js';
-import { ArgumentsRequired, AuthenticationError } from './base/errors.js';
-import type { Balances, Dict, FundingRateHistory, Int, Market, Num, OHLCV, Order, OrderBook, OrderSide, OrderType, Position, Str, Strings, Ticker, Tickers, Trade } from './base/types.js';
+import { ArgumentsRequired, AuthenticationError, OrderNotFound } from './base/errors.js';
+import type { Balances, Dict, FundingRateHistory, Int, LeverageTier, LeverageTiers, Market, Num, OHLCV, Order, OrderBook, OrderSide, OrderType, Position, Str, Strings, Ticker, Tickers, Trade } from './base/types.js';
 
 // ----------------------------------------------------------------------------
 // Discriminated union types for all signable payloads.
@@ -104,8 +104,11 @@ export default class bluefin extends Exchange {
                 'fetchFundingRateHistory': true,
                 'fetchMarkets': true,
                 'fetchMyTrades': true,
+                'fetchClosedOrders': true,
+                'fetchLeverageTiers': true,
                 'fetchOHLCV': true,
                 'fetchOpenOrders': true,
+                'fetchOrder': true,
                 'fetchOrderBook': true,
                 'fetchPositions': true,
                 'fetchTicker': true,
@@ -534,6 +537,150 @@ export default class bluefin extends Exchange {
             result.push (this.parseOrder (orders[i], market));
         }
         return result;
+    }
+
+    async fetchOrder (id: string, symbol: Str = undefined, params = {}): Promise<Order> {
+        // Bluefin has no individual order lookup endpoint.
+        // Strategy: check openOrders → standbyOrders → reconstruct from trades.
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const request: Dict = {};
+        let market: Market = undefined;
+        if (symbol !== undefined) {
+            market = this.market (symbol);
+            request['symbol'] = this.bluefinSymbol (symbol);
+        }
+        // 1. Search open orders
+        const openResponse = await this.tradeGetApiV1TradeOpenOrders (this.extend (request, params));
+        const openOrders = Array.isArray (openResponse) ? openResponse : this.safeList (openResponse, 'orders', []);
+        for (let i = 0; i < openOrders.length; i++) {
+            if (this.safeString (openOrders[i], 'orderHash') === id) {
+                return this.parseOrder (openOrders[i], market);
+            }
+        }
+        // 2. Search standby orders (conditional/trigger orders)
+        const standbyResponse = await this.tradeGetApiV1TradeStandbyOrders (this.extend (request, params));
+        const standbyOrders = Array.isArray (standbyResponse) ? standbyResponse : this.safeList (standbyResponse, 'orders', []);
+        for (let i = 0; i < standbyOrders.length; i++) {
+            if (this.safeString (standbyOrders[i], 'orderHash') === id) {
+                return this.parseOrder (standbyOrders[i], market);
+            }
+        }
+        // 3. Reconstruct from trades (order was filled/closed)
+        const tradeRequest: Dict = {};
+        if (symbol !== undefined) {
+            tradeRequest['symbol'] = this.bluefinSymbol (symbol);
+        }
+        const tradeResponse = await this.accountGetApiV1AccountTrades (this.extend (tradeRequest, params));
+        const trades = Array.isArray (tradeResponse) ? tradeResponse : this.safeList (tradeResponse, 'trades', []);
+        const matchingTrades: Dict[] = [];
+        for (let i = 0; i < trades.length; i++) {
+            if (this.safeString (trades[i], 'orderHash') === id) {
+                matchingTrades.push (trades[i]);
+            }
+        }
+        if (matchingTrades.length > 0) {
+            return this.reconstructOrderFromTrades (id, matchingTrades, market);
+        }
+        throw new OrderNotFound (this.id + ' fetchOrder() order ' + id + ' not found');
+    }
+
+    async fetchClosedOrders (symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Order[]> {
+        await this.loadMarkets ();
+        await this.getAccessToken ();
+        const request: Dict = {};
+        let market: Market = undefined;
+        if (symbol !== undefined) {
+            market = this.market (symbol);
+            request['symbol'] = this.bluefinSymbol (symbol);
+        }
+        if (since !== undefined) {
+            request['startTimeAtMillis'] = since;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.accountGetApiV1AccountTrades (this.extend (request, params));
+        const trades = Array.isArray (response) ? response : this.safeList (response, 'trades', []);
+        // Group trades by orderHash
+        const grouped: Dict = {};
+        for (let i = 0; i < trades.length; i++) {
+            const orderHash = this.safeString (trades[i], 'orderHash');
+            if (orderHash === undefined) {
+                continue;
+            }
+            if (grouped[orderHash] === undefined) {
+                grouped[orderHash] = [];
+            }
+            grouped[orderHash].push (trades[i]);
+        }
+        // Reconstruct one Order per unique orderHash
+        const result: Order[] = [];
+        const orderHashes = Object.keys (grouped);
+        for (let i = 0; i < orderHashes.length; i++) {
+            result.push (this.reconstructOrderFromTrades (orderHashes[i], grouped[orderHashes[i]], market));
+        }
+        return result;
+    }
+
+    reconstructOrderFromTrades (id: string, trades: Dict[], market: Market = undefined): Order {
+        // Reconstruct a closed Order from its constituent trade fills.
+        // All trades share the same orderHash, side, symbol.
+        const first = trades[0];
+        const bluefinSym = this.safeString (first, 'symbol');
+        const symbol = (bluefinSym !== undefined) ? this.ccxtSymbol (bluefinSym) : undefined;
+        const side = this.parseOrderSide (this.safeString (first, 'side'));
+        // Aggregate: total filled qty, total cost, total fee, latest timestamp
+        let filledE9 = '0';
+        let costE9 = '0';
+        let feeE9 = '0';
+        let lastTimestamp = 0;
+        for (let i = 0; i < trades.length; i++) {
+            const qtyStr = this.safeString (trades[i], 'quantityE9', '0');
+            const costStr = this.safeString (trades[i], 'quoteQuantityE9', '0');
+            const feeStr = this.safeString (trades[i], 'tradingFeeE9', '0');
+            filledE9 = Precise.stringAdd (filledE9, qtyStr);
+            costE9 = Precise.stringAdd (costE9, costStr);
+            feeE9 = Precise.stringAdd (feeE9, feeStr);
+            const ts = this.safeInteger (trades[i], 'executedAtMillis', 0);
+            if (ts > lastTimestamp) {
+                lastTimestamp = ts;
+            }
+        }
+        const filled = this.parseE9 (filledE9);
+        const cost = this.parseE9 (costE9);
+        const fee = this.parseE9 (feeE9);
+        // Average price = total cost / total filled qty
+        const average = (filledE9 !== '0')
+            ? Precise.stringDiv (costE9, filledE9)
+            : undefined;
+        const timestamp = this.safeInteger (first, 'executedAtMillis');
+        return this.safeOrder ({
+            'id': id,
+            'clientOrderId': undefined,
+            'info': trades,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'lastTradeTimestamp': lastTimestamp,
+            'symbol': symbol,
+            'type': undefined,
+            'timeInForce': undefined,
+            'postOnly': undefined,
+            'reduceOnly': undefined,
+            'side': side,
+            'price': undefined,
+            'amount': undefined,
+            'filled': filled,
+            'remaining': this.parseNumber ('0'),
+            'cost': cost,
+            'average': average,
+            'status': 'closed',
+            'fee': {
+                'cost': this.parseNumber (fee),
+                'currency': 'USDC',
+            },
+            'trades': undefined,
+        }, market);
     }
 
     // ---- Private write methods ----
@@ -1078,6 +1225,77 @@ export default class bluefin extends Exchange {
             'SELL': 'sell',
         };
         return this.safeString (sides, side, side);
+    }
+
+    // ---- Leverage tiers ----
+
+    async fetchLeverageTiers (symbols: Strings = undefined, params = {}): Promise<LeverageTiers> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols);
+        const result: LeverageTiers = {};
+        const marketIds = Object.keys (this.markets);
+        for (let i = 0; i < marketIds.length; i++) {
+            const market = this.markets[marketIds[i]];
+            if (!market['swap']) {
+                continue;
+            }
+            const symbol = market['symbol'];
+            if (symbols !== undefined && !this.inArray (symbol, symbols)) {
+                continue;
+            }
+            const tiers = this.parseMarketLeverageTiers (market['info'], market);
+            if (tiers.length > 0) {
+                result[symbol] = tiers;
+            }
+        }
+        return result;
+    }
+
+    parseMarketLeverageTiers (info: Dict, market: Market = undefined): LeverageTier[] {
+        // maxNotionalAtOpenE9 is an array where index i = max open notional
+        // at leverage (i+1)x. Higher leverage → lower max notional.
+        // CCXT convention: tiers are sorted by ascending notional range,
+        // each tier specifying the max leverage allowed at that notional bracket.
+        // So we invert: highest leverage (last valid entry) → lowest notional → tier 1.
+        const maxNotionalAtOpenE9 = this.safeList (info, 'maxNotionalAtOpenE9', []);
+        const maintenanceMarginRatioE9 = this.safeString (info, 'maintenanceMarginRatioE9');
+        const mmr = (maintenanceMarginRatioE9 !== undefined)
+            ? this.parseNumber (this.parseE9 (maintenanceMarginRatioE9))
+            : undefined;
+        // Collect valid (leverage, maxNotional) pairs, filter zeros
+        const validPairs: { leverage: number; maxNotional: number; maxNotionalE9: string }[] = [];
+        for (let i = maxNotionalAtOpenE9.length - 1; i >= 0; i--) {
+            const maxNotionalStr = this.safeString (maxNotionalAtOpenE9, i);
+            if (maxNotionalStr === undefined || maxNotionalStr === '0') {
+                continue;
+            }
+            const maxNotional = this.parseNumber (this.parseE9 (maxNotionalStr));
+            validPairs.push ({
+                'leverage': i + 1,
+                'maxNotional': maxNotional,
+                'maxNotionalE9': maxNotionalStr,
+            });
+        }
+        // validPairs is now highest-leverage-first (smallest notional first) — exactly what we need
+        const tiers: LeverageTier[] = [];
+        for (let i = 0; i < validPairs.length; i++) {
+            const pair = validPairs[i];
+            const minNotional = (i === 0) ? 0 : validPairs[i - 1]['maxNotional'];
+            tiers.push ({
+                'tier': i + 1,
+                'symbol': (market !== undefined) ? market['symbol'] : undefined,
+                'currency': 'USDC',
+                'minNotional': minNotional,
+                'maxNotional': pair['maxNotional'],
+                'maintenanceMarginRate': mmr,
+                'maxLeverage': pair['leverage'],
+                'info': {
+                    'maxNotionalE9': pair['maxNotionalE9'],
+                    'leverage': pair['leverage'],
+                },
+            });
+        }
+        return tiers;
     }
 
     // ---- HTTP signing ----
