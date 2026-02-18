@@ -5,7 +5,9 @@ import Exchange from './abstract/bluefin.js';
 import { Precise } from './base/Precise.js';
 import { TICK_SIZE } from './base/functions/number.js';
 import { ed25519 } from './static_dependencies/noble-curves/ed25519.js';
-import { blake2b } from './static_dependencies/noble-hashes/blake2b.js';
+import { eddsa } from './base/functions/crypto.js';
+import { eddsaPublicKey } from './base/functions/crypto.js';
+import { blake2b256 } from './base/functions/crypto.js';
 import { ArgumentsRequired, AuthenticationError, OrderNotFound } from './base/errors.js';
 import type { Balances, Dict, FundingRateHistory, Int, LeverageTier, LeverageTiers, Market, Num, OHLCV, Order, OrderBook, OrderSide, OrderType, Position, Str, Strings, Ticker, Tickers, Trade } from './base/types.js';
 
@@ -167,39 +169,14 @@ export default class bluefin extends Exchange {
         return this.binaryConcat (result, data);
     }
 
-    suiBlake2b256 (data: any): any {
-        // Blake2b-256 hash (32-byte digest)
-        // TS: uses noble-hashes blake2b, Python: uses hashlib.blake2b
-        return blake2b (data, { dkLen: 32 });
-    }
-
-    suiEd25519Sign (digest: any, keyBytes: any): any {
-        // Ed25519 raw signature (64 bytes)
-        // TS: uses noble-curves ed25519, Python: uses cryptography library
-        return ed25519.sign (digest, keyBytes);
-    }
-
-    suiEd25519PublicKey (keyBytes: any): any {
-        // Derive Ed25519 public key (32 bytes) from private key
-        // TS: uses noble-curves ed25519, Python: uses cryptography library
-        return ed25519.getPublicKey (keyBytes);
-    }
-
     suiSignPersonalMessage (message: any, privateKeyHex: string): string {
-        // Sui personal-message signing:
-        // 1. BCS-serialize the message (ULEB128 length + bytes)
-        // 2. Prepend intent bytes [3, 0, 0] (PersonalMessage)
-        // 3. Blake2b-256 hash the intent-prefixed message
-        // 4. Ed25519-sign the hash
-        // 5. Envelope: flag(0x00) || sig(64) || pubkey(32)
-        // 6. Return base64
         const bcsMsg = this.bcsSerializeBytes (message);
         const intentPrefix = this.base16ToBinary ('030000');
         const intentMsg = this.binaryConcat (intentPrefix, bcsMsg);
-        const digest = this.suiBlake2b256 (intentMsg);
+        const digest = this.hash (intentMsg, blake2b256, 'binary');
         const keyBytes = this.base16ToBinary (privateKeyHex.replace ('0x', ''));
-        const sig = this.suiEd25519Sign (digest, keyBytes);
-        const pubkey = this.suiEd25519PublicKey (keyBytes);
+        const sig = this.base64ToBinary (eddsa (digest, keyBytes, ed25519));
+        const pubkey = eddsaPublicKey (keyBytes, ed25519);
         const flagByte = this.base16ToBinary ('00');
         const envelope = this.binaryConcat (flagByte, sig, pubkey);
         return this.binaryToBase64 (envelope);

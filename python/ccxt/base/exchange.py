@@ -1298,6 +1298,9 @@ class Exchange(object):
     def hash(request, algorithm='md5', digest='hex'):
         if algorithm == 'keccak':
             binary = bytes(keccak.SHA3(request))
+        elif algorithm == 'blake2b256':
+            h = hashlib.new('blake2b', request, digest_size=32)
+            binary = h.digest()
         else:
             h = hashlib.new(algorithm, request)
             binary = h.digest()
@@ -1623,6 +1626,14 @@ class Exchange(object):
             return Exchange.binary_to_urlencoded_base64(signature)
 
         return Exchange.binary_to_base64(signature)
+
+    @staticmethod
+    def eddsa_public_key(secret, curve='ed25519'):
+        if isinstance(secret, str):
+            secret = Exchange.encode(secret)
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(secret) if len(secret) == 32 else load_pem_private_key(secret, None)
+        return private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
 
     @staticmethod
     def axolotl(request, secret, curve='ed25519'):

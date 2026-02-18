@@ -1,6 +1,7 @@
 /*  ------------------------------------------------------------------------ */
 
 import { hmac as _hmac } from '../../static_dependencies/noble-hashes/hmac.js';
+import { blake2b } from '../../static_dependencies/noble-hashes/blake2b.js';
 import { base16,  base64, base58 } from '../../static_dependencies/scure-base/index.js';
 import { CHash, Input } from '../../static_dependencies/noble-hashes/utils.js';
 import { CurveFn } from '../../static_dependencies/noble-curves/abstract/weierstrass.js';
@@ -113,6 +114,21 @@ function eddsa (request: Hex, secret: Input, curve: CurveFnEDDSA) {
     return base64.encode (signature)
 }
 
+const blake2b256: CHash = /* @__PURE__ */ Object.assign (
+    (request: Input) => blake2b (request, { dkLen: 32 }),
+    { outputLen: 32 as number, blockLen: blake2b.blockLen, create () { return blake2b.create ({ dkLen: 32 }) as any; } }
+);
+
+function eddsaPublicKey (secret: Input, curve: CurveFnEDDSA) {
+    let privateKey = undefined;
+    if (secret.length === 32) {
+        privateKey = secret;
+    } else if (typeof secret === 'string') {
+        privateKey = new Uint8Array (Base64.unarmor (secret).slice (16));
+    }
+    return curve.getPublicKey (privateKey);
+}
+
 /*  ------------------------------------------------------------------------ */
 
 // source: https://stackoverflow.com/a/18639975/1067003
@@ -144,7 +160,9 @@ export {
     crc32,
     ecdsa,
     eddsa,
+    eddsaPublicKey,
     axolotl,
+    blake2b256,
 };
 
 /*  ------------------------------------------------------------------------ */

@@ -5,7 +5,6 @@
 
 from ccxt.async_support.base.exchange import Exchange
 from ccxt.abstract.bluefin import ImplicitAPI
-import hashlib
 from ccxt.base.types import Any, Balances, Int, LeverageTier, LeverageTiers, Market, Num, Order, OrderBook, OrderSide, OrderType, Position, Str, Strings, Ticker, Tickers, Trade, FundingRateHistory
 from typing import List
 from ccxt.base.errors import AuthenticationError
@@ -169,39 +168,14 @@ class bluefin(Exchange, ImplicitAPI):
         result = self.binary_concat(result, self.number_to_be(remaining, 1))
         return self.binary_concat(result, data)
 
-    def sui_blake2b256(self, data: Any) -> Any:
-        # Blake2b-256 hash (32-byte digest) — Python override (hashlib)
-        import hashlib
-        return hashlib.new('blake2b', data, digest_size=32).digest()
-
-    def sui_ed25519_sign(self, digest: Any, keyBytes: Any) -> Any:
-        # Ed25519 raw signature (64 bytes) — Python override (cryptography)
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        private_key = Ed25519PrivateKey.from_private_bytes(keyBytes)
-        return private_key.sign(digest)
-
-    def sui_ed25519_public_key(self, keyBytes: Any) -> Any:
-        # Derive Ed25519 public key (32 bytes) — Python override (cryptography)
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        private_key = Ed25519PrivateKey.from_private_bytes(keyBytes)
-        return private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-
     def sui_sign_personal_message(self, message: Any, privateKeyHex: str) -> str:
-        # Sui personal-message signing:
-        # 1. BCS-serialize the message(ULEB128 length + bytes)
-        # 2. Prepend intent bytes [3, 0, 0](PersonalMessage)
-        # 3. Blake2b-256 hash the intent-prefixed message
-        # 4. Ed25519-sign the hash
-        # 5. Envelope: flag(0x00) or sig(64) or pubkey(32)
-        # 6. Return base64
         bcsMsg = self.bcs_serialize_bytes(message)
         intentPrefix = self.base16_to_binary('030000')
         intentMsg = self.binary_concat(intentPrefix, bcsMsg)
-        digest = self.sui_blake2b256(intentMsg)
+        digest = self.hash(intentMsg, 'blake2b256', 'binary')
         keyBytes = self.base16_to_binary(privateKeyHex.replace('0x', ''))
-        sig = self.sui_ed25519_sign(digest, keyBytes)
-        pubkey = self.sui_ed25519_public_key(keyBytes)
+        sig = self.base64_to_binary(self.eddsa(digest, keyBytes, 'ed25519'))
+        pubkey = self.eddsa_public_key(keyBytes, 'ed25519')
         flagByte = self.base16_to_binary('00')
         envelope = self.binary_concat(flagByte, sig, pubkey)
         return self.binary_to_base64(envelope)

@@ -112,7 +112,7 @@ class Transpiler {
     getCommonRegexes (): any[] {
 
         return [
-            [ /(?<!assert|equals|verify)(\s\(?)(rsa|ecdsa|eddsa|jwt|totp|inflate)\s/g, '$1this.$2' ],
+            [ /(?<!assert|equals|verify)(\s\(?)(rsa|ecdsa|eddsaPublicKey|eddsa|jwt|totp|inflate)\s/g, '$1this.$2' ],
             [ /errorHierarchy/g, 'error_hierarchy'],
             [ /\.featuresGenerator/g, '.features_generator'],
             [ /\.featuresMapper/g, '.features_mapper'],
@@ -159,7 +159,7 @@ class Transpiler {
             [ /this\.[a-zA-Z0-9_]+ \(/g, this.trimmedUnCamelCase.bind(this) ],
             [ /super\.[a-zA-Z0-9_]+ \(/g, this.trimmedUnCamelCase.bind(this) ],
             [ /\ssha(1|256|384|512)([,)])/g, ' \'sha$1\'$2'], // from js imports to this
-            [ /\s(md5|secp256k1|ed25519|keccak)([,)])/g, ' \'$1\'$2'], // from js imports to this
+            [ /\s(md5|secp256k1|ed25519|keccak|blake2b256)([,)])/g, ' \'$1\'$2'], // from js imports to this
 
         ].concat(this.getTypescriptRemovalRegexes())
     }
