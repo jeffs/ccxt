@@ -15,8 +15,8 @@ interface Exchange {
     accountGetApiV1AccountTrades(params?: {}): Promise<implicitReturnType>;
     accountGetApiV1AccountTransactions(params?: {}): Promise<implicitReturnType>;
     accountGetApiV1AccountFundingRateHistory(params?: {}): Promise<implicitReturnType>;
-    accountGetApiV1TradeOpenOrders(params?: {}): Promise<implicitReturnType>;
-    accountGetApiV1TradeStandbyOrders(params?: {}): Promise<implicitReturnType>;
+    tradeGetApiV1TradeOpenOrders(params?: {}): Promise<implicitReturnType>;
+    tradeGetApiV1TradeStandbyOrders(params?: {}): Promise<implicitReturnType>;
     tradePostApiV1TradeOrders(params?: {}): Promise<implicitReturnType>;
     tradePostApiV1TradeWithdraw(params?: {}): Promise<implicitReturnType>;
     tradePutApiV1TradeOrdersCancel(params?: {}): Promise<implicitReturnType>;
